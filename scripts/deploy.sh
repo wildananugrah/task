@@ -15,9 +15,13 @@
 # Deliberately NOT done here:
 #   * `db:seed`  — it truncates every table. Seeding is a one-off, by hand.
 #   * touching backend/.env or infra/.env — real secrets, placed once by hand.
-#   * `git pull` — you deploy the tree you are looking at, not a moving target.
+#   * pulling, unless --pull is passed. By hand you deploy the tree you are
+#     looking at, not a moving target; CI passes --pull so the box ends up on
+#     exactly origin/main. The guards live here rather than in the workflow so
+#     they cannot be skipped by editing a yaml file.
 #
 # Usage: scripts/deploy.sh [options]   (run from anywhere)
+#   --pull           fast-forward the checkout to origin/main first (CI uses this)
 #   --skip-infra     don't touch docker compose
 #   --skip-web       don't build/publish the frontend
 #   --skip-api       don't install/migrate/restart the backend
@@ -48,15 +52,16 @@ PM2_APP="task-api"
 PM2_WS_APP="task-ws"
 PM2_ECOSYSTEM="$REPO_ROOT/ecosystem.config.cjs"
 
-DO_INFRA=1 DO_WEB=1 DO_API=1 DO_NGINX=1 PARALLEL=1
+DO_INFRA=1 DO_WEB=1 DO_API=1 DO_NGINX=1 PARALLEL=1 DO_PULL=0
 for arg in "$@"; do
   case "$arg" in
+    --pull)       DO_PULL=1 ;;
     --skip-infra) DO_INFRA=0 ;;
     --skip-web)   DO_WEB=0 ;;
     --skip-api)   DO_API=0 ;;
     --skip-nginx) DO_NGINX=0 ;;
     --serial)     PARALLEL=0 ;;
-    -h|--help)    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)    sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -69,6 +74,40 @@ say()  { printf "\n\033[1m==> %s\033[0m\n" "$*"; }
 info() { printf "    %s\n" "$*"; }
 ok()   { printf "    \033[32mok\033[0m %s\n" "$*"; }
 die()  { printf "\033[31mERROR:\033[0m %s\n" "$*" >&2; exit 1; }
+
+# --------------------------------------------------------------------- sync
+# Before anything reads the tree, put it on exactly origin/main.
+if [ "$DO_PULL" = 1 ]; then
+  say "sync: fast-forwarding to origin/main"
+  command -v git >/dev/null || die "missing required command: git"
+
+  # A dirty tree would be deployed as-is: unreviewed edits shipped to production
+  # and recorded nowhere. Ignoring untracked files is deliberate — the .env files
+  # and references/ live here and are not part of any deploy.
+  if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    git status --short --untracked-files=no | sed 's/^/    /' >&2
+    die "working tree has uncommitted changes — commit, stash or revert them first"
+  fi
+
+  git fetch --quiet origin main || die "could not fetch origin"
+
+  branch="$(git rev-parse --abbrev-ref HEAD)"
+  if [ "$branch" != "main" ]; then
+    # Safe: the tree is known clean, so nothing can be lost by switching.
+    info "on branch '$branch'; switching to main"
+    git checkout --quiet main 2>/dev/null || git checkout --quiet -b main origin/main
+  fi
+
+  # `git merge --ff-only` reports "Already up to date" when the clone is AHEAD of
+  # the remote, which would quietly deploy commits that exist on no remote and
+  # that nobody has reviewed. Ancestry is the check that actually catches it.
+  if ! git merge-base --is-ancestor HEAD origin/main; then
+    die "local main has commits that are not on origin/main ($(git rev-parse --short HEAD)) — push them, or reset to origin/main, before deploying"
+  fi
+
+  git merge --ff-only --quiet origin/main || die "fast-forward to origin/main failed"
+  ok "at origin/main ($(git rev-parse --short HEAD) $(git log -1 --pretty=%s | cut -c1-60))"
+fi
 
 # ---------------------------------------------------------------- preflight
 # Fail before mutating anything, rather than half-deploying and stopping.
