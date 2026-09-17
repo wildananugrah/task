@@ -633,8 +633,10 @@ export function AppProvider({ children }) {
           )
           if (!presigned) continue
 
-          const put = await run(() => putToStorage(presigned.uploadUrl, file))
-          if (put === undefined && !presigned.uploadUrl) continue
+          // Only a confirmed PUT may be completed. The row stays 'pending' and
+          // invisible otherwise, which is the whole point of the three-step
+          // upload; the sweep collects it later.
+          if (!(await run(() => putToStorage(presigned.uploadUrl, file)))) continue
 
           const done = await run(() => api.completeUpload(presigned.fileId))
           if (done) uploaded.push(done.file)
@@ -848,8 +850,7 @@ export function AppProvider({ children }) {
           api.presignLogo(wsId, { name: file.name, contentType: file.type }),
         )
         if (!presigned) return
-        const put = await run(() => putToStorage(presigned.uploadUrl, file))
-        if (put === undefined && !presigned.key) return
+        if (!(await run(() => putToStorage(presigned.uploadUrl, file)))) return
         const result = await run(() => api.completeLogo(wsId, presigned.key))
         if (!result) return
         update((prev) => ({ workspace: { ...prev.workspace, ...result.workspace } }))

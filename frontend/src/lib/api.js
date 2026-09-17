@@ -120,12 +120,29 @@ export const api = {
  * bytes — so this is a bare fetch rather than an api.* call.
  */
 export async function putToStorage(uploadUrl, file) {
-  const response = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: { 'content-type': file.type || 'application/octet-stream' },
-  })
+  let response
+  try {
+    response = await fetch(uploadUrl, {
+      method: 'PUT',
+      body: file,
+      headers: { 'content-type': file.type || 'application/octet-stream' },
+    })
+  } catch (cause) {
+    // A cross-origin PUT the bucket has no CORS rule for fails here, as a
+    // network error with no status — the browser will not even show us the
+    // response. It is the most likely way this call fails in a new deployment.
+    throw new ApiError(
+      0,
+      'upload_blocked',
+      'The storage bucket refused the upload. It usually means its CORS rules do not allow this site.',
+      cause,
+    )
+  }
   if (!response.ok) {
     throw new ApiError(response.status, 'upload_failed', 'The file could not be uploaded')
   }
+  // Returns a value so callers can tell success from failure. As a bare
+  // `return;` it was indistinguishable from run()'s undefined-on-error, and a
+  // failed upload went on to be marked ready — a file row pointing at nothing.
+  return true
 }
