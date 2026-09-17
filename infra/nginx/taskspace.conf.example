@@ -4,8 +4,8 @@
 # repointed at this app.
 #
 # Two prefixes reach a process; everything else is the SPA bundle.
-#   /api/  → backend  :3004
-#   /ws    → ws       :3005   (needs the Upgrade headers, or it 400s)
+#   /api/  → backend  :3104
+#   /ws    → ws       :3105   (needs the Upgrade headers, or it 400s)
 
 server {
   listen 443 ssl;
@@ -33,7 +33,7 @@ server {
 
   # `^~` so no regex location can claim it first.
   location ^~ /api/ {
-    proxy_pass http://127.0.0.1:3004;
+    proxy_pass http://127.0.0.1:3104;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -44,7 +44,7 @@ server {
   # straight to the bucket — so no client_max_body_size bump is needed.
 
   location ^~ /ws {
-    proxy_pass http://127.0.0.1:3005;
+    proxy_pass http://127.0.0.1:3105;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";

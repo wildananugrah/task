@@ -100,6 +100,34 @@ if [ "$DO_API" = 1 ]; then
   if [ "$(env_value WS_TICKET_SECRET)" != "$(grep -E '^WS_TICKET_SECRET=' ws/.env | tail -1 | cut -d= -f2- | tr -d '[:space:]')" ]; then
     die "WS_TICKET_SECRET differs between backend/.env and ws/.env — every socket connection would be rejected"
   fi
+
+  # Warnings, not failures: both leave a site that comes up and serves, so a
+  # deploy while they are still being set up is a reasonable thing to want.
+  case "$(env_value S3_BUCKET)$(env_value S3_ACCESS_KEY_ID)" in
+    *CHANGE_ME*|"") info "WARNING: S3 is not configured — file upload, preview and download will fail in the browser. Everything else works." ;;
+  esac
+  if [ -z "$(env_value GOOGLE_CLIENT_ID)" ] && [ "$(env_value AUTH_DEV_MODE)" != "true" ]; then
+    info "WARNING: no GOOGLE_CLIENT_ID and AUTH_DEV_MODE=false — NOBODY can sign in. The site will load and show a login screen with no way past it."
+  fi
+
+  # The ports nginx forwards to have to be the ports the apps bind, and on a
+  # shared box the obvious number is often already taken by something else.
+  if [ "$DO_NGINX" = 1 ] && [ -f "deploy/nginx/$NGINX_SITE" ]; then
+    grep -q "proxy_pass http://127.0.0.1:$API_PORT;" "deploy/nginx/$NGINX_SITE" \
+      || die "deploy/nginx/$NGINX_SITE does not proxy to API_PORT ($API_PORT) — /api would reach the wrong process or none"
+    grep -q "proxy_pass http://127.0.0.1:$WS_PORT;" "deploy/nginx/$NGINX_SITE" \
+      || die "deploy/nginx/$NGINX_SITE does not proxy to WS_PORT ($WS_PORT) — chat would be unreachable"
+  fi
+
+  # Bind before pm2 does, so a port owned by another app is a clean refusal here
+  # rather than a crash-looping pm2 process and a confusing 502.
+  for port_pair in "API_PORT:$API_PORT" "WS_PORT:$WS_PORT"; do
+    port="${port_pair#*:}"
+    holder="$(ss -ltnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | head -1 || true)"
+    if [ -n "$holder" ] && ! pm2 pid "$PM2_APP" 2>/dev/null | grep -qx "$holder" && ! pm2 pid "$PM2_WS_APP" 2>/dev/null | grep -qx "$holder"; then
+      die "${port_pair%%:*} $port is already held by pid $holder ($(ps -o comm= -p "$holder" 2>/dev/null)) — pick a free port in backend/.env and match it in deploy/nginx/$NGINX_SITE"
+    fi
+  done
 fi
 
 # A deploy that leaves the API unreachable from nginx is worse than no deploy.

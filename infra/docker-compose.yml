@@ -13,7 +13,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-taskspace}
       POSTGRES_DB: ${POSTGRES_DB:-taskspace}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Bound to loopback: the API is the only thing that needs this, and a
+      # published 0.0.0.0 port puts the database on the public internet.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -34,8 +36,11 @@ services:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:-taskspace}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:-taskspace-secret}
     ports:
-      - "${S3_PORT:-9000}:9000"
-      - "${S3_CONSOLE_PORT:-9001}:9001"
+      # Loopback for the same reason. In production the bucket is third-party
+      # and this container is not used at all; locally the browser reaches it
+      # through the dev server on the same machine.
+      - "127.0.0.1:${S3_PORT:-9000}:9000"
+      - "127.0.0.1:${S3_CONSOLE_PORT:-9001}:9001"
     volumes:
       - miniodata:/data
     healthcheck:
