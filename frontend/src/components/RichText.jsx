@@ -12,6 +12,26 @@ export default function RichText({ text, onDark = false }) {
   const parts = parseRichText(text)
 
   return parts.map((part) => {
+    // A link is the one token whose target is outside the app, so it opens in a
+    // new tab and carries noopener: the page it opens must not get a handle on
+    // this one through window.opener. nofollow because the text is user-written.
+    if (part.url) {
+      return (
+        <a
+          key={part.key}
+          href={part.url}
+          target="_blank"
+          rel="noopener noreferrer nofollow"
+          onClick={(event) => event.stopPropagation()}
+          title={part.url}
+          style={{ color: onDark ? '#d4d4d4' : '#171717' }}
+          className="font-medium break-all underline decoration-current underline-offset-2 hover:decoration-2"
+        >
+          {part.value}
+        </a>
+      )
+    }
+
     const target = part.taskRef ? taskByRef(state, part.taskRef) : null
     const token = part.isMention || target
 
