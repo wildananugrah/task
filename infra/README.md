@@ -68,6 +68,16 @@ From `backend/`:
 | `bun run db:reset` | drop and recreate the schema (refuses in production) |
 | `bun run files:sweep` | delete uploads that were never confirmed |
 
+## Continuous deployment
+
+A push to `main` deploys, through `.github/workflows/deploy.yml`, on a
+self-hosted runner on the production box — the same arrangement carreel and
+diudara use. `docs/RUNNER.md` registers it; the runners are repo-scoped, so the
+existing two will not pick up this repository's jobs.
+
+The workflow runs one thing: `scripts/deploy.sh --pull`. That refuses to deploy
+a dirty checkout, or one holding commits that are not on `origin/main`.
+
 ## Going to production
 
 1. **Postgres**: any managed instance. Set `DATABASE_URL`, run `db:push`.
