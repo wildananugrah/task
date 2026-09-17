@@ -485,9 +485,16 @@ export default function TaskDrawer() {
                 aria-label="Description"
                 className="resize-y rounded-lg border border-ink/16 bg-subtle px-3 py-[11px] text-[13.5px] leading-[1.65]"
               />
+            ) : task.description ? (
+              // Same tokens as a comment: links, @mentions and /TSK-104 refs.
+              // whitespace-pre-wrap because this is written in a textarea — the
+              // paragraph used to collapse every line break the author typed.
+              <p className="m-0 text-[13.5px] leading-[1.7] whitespace-pre-wrap text-ink/75 text-pretty">
+                <RichText text={task.description} />
+              </p>
             ) : (
-              <p className="m-0 text-[13.5px] leading-[1.7] text-ink/75 text-pretty">
-                {task.description || 'No description yet.'}
+              <p className="m-0 text-[13.5px] leading-[1.7] text-ink/45 italic">
+                No description yet.
               </p>
             )}
           </div>

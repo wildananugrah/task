@@ -459,7 +459,9 @@ export function AppProvider({ children }) {
         },
         tasks: prev.tasks.map((task) => (task.id === taskId ? { ...task, ...payload.task } : task)),
       }))
-      resolveRefs(payload.task.comments.map((comment) => comment.body))
+      // The description carries the same /TSK-104 tokens a comment does, and
+      // one may point at a task in a workspace that is not open.
+      resolveRefs([payload.task.description, ...payload.task.comments.map((c) => c.body)])
     }
 
     return {
