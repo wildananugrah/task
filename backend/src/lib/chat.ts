@@ -170,17 +170,25 @@ export async function postMessage(conversationId: string, userId: string, body: 
 }
 
 export async function markRead(conversationId: string, userId: string) {
-  const now = new Date()
-  await db
+  // now() from the database, not new Date() from this process. Unread is
+  // `messages.created_at > last_read_at`, and created_at is written by
+  // Postgres — comparing it against a timestamp from the API's clock means two
+  // clocks decide whether you have read something. A few milliseconds of drift
+  // either hides a message that arrived just after the read, or leaves one
+  // unread forever. On one box they are the same clock; with a managed
+  // database they are not.
+  const [row] = await db
     .update(conversationMembers)
-    .set({ lastReadAt: now })
+    .set({ lastReadAt: sql`now()` })
     .where(
       and(
         eq(conversationMembers.conversationId, conversationId),
         eq(conversationMembers.userId, userId),
       ),
     )
-  return now
+    .returning({ at: conversationMembers.lastReadAt })
+
+  return row?.at ?? new Date()
 }
 
 /** Find-or-create the one DM between two people. */

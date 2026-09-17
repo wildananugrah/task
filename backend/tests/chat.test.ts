@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { sql } from 'drizzle-orm'
+import { db } from '../src/db/client'
 import {
   conversationAudience,
   conversationPeers,
@@ -119,5 +121,28 @@ describe('socket fan-out', () => {
     const peers = await conversationPeers(admin.user.id)
     expect(peers.filter((id) => id === member.user.id)).toHaveLength(1)
     expect(peers).not.toContain(admin.user.id)
+  })
+})
+
+describe('read state uses one clock', () => {
+  /**
+   * Unread is `messages.created_at > last_read_at`. created_at is written by
+   * Postgres, so last_read_at must be too — a timestamp from the API process
+   * makes two clocks decide whether something has been read, and a few
+   * milliseconds of drift either hides a new message or strands an old one.
+   */
+  test('markRead returns a database timestamp, not a process one', async () => {
+    const { room, admin, member } = await scenario()
+    await postMessage(room.id, admin.user.id, 'before')
+
+    const at = await markRead(room.id, member.user.id)
+    const [{ now }] = await db.execute<{ now: Date }>(sql`select now() as now`)
+
+    // Within a second of the database's own clock, whatever this process thinks.
+    expect(Math.abs(new Date(at).getTime() - new Date(now).getTime())).toBeLessThan(1000)
+
+    // And the message that came before it is read, with no sleep anywhere.
+    const after = (await listConversations(member.user.id)).find((c) => c.id === room.id)
+    expect(after?.unread).toBe(0)
   })
 })
