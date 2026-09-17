@@ -15,8 +15,7 @@ curl -o actions-runner-linux-x64-2.337.0.tar.gz -L \
 tar xzf actions-runner-linux-x64-2.337.0.tar.gz
 
 ./config.sh --url https://github.com/wildananugrah/task \
-            --token <PASTE_TOKEN> \
-            --name wildandev --labels self-hosted --unattended
+            --token ADSDIV5KCGIXMMKJ4IUDTX3KVRZ5M
 
 sudo ./svc.sh install wildandev
 sudo ./svc.sh start
