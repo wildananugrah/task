@@ -545,20 +545,38 @@ export function AppProvider({ children }) {
        * workspace may not be the open one, so it is loaded first.
        */
       revealTask: async (taskIdOrRef) => {
+        const matches = (task) => task.id === taskIdOrRef || task.ref === taskIdOrRef
         const prev = stateRef.current
-        const local =
-          prev.tasks.find((task) => task.id === taskIdOrRef || task.ref === taskIdOrRef) ?? null
 
+        const local = prev.tasks.find(matches) ?? null
         if (local) {
           update({ screen: 'tasks', selId: local.id, editing: false, gFocus: false, gq: '' })
           loadDetail(local.id)
           return
         }
 
-        const hit =
-          prev.searchResults.find((task) => task.id === taskIdOrRef || task.ref === taskIdOrRef) ??
-          null
-        if (!hit) return
+        // Every place a ref can already be resolved, in the same order
+        // taskByRef uses. The two lists used to disagree: RichText links
+        // anything taskByRef knows, including the refIndex cache, while this
+        // searched only two of the three — so a ref that resolved through the
+        // cache rendered as a link and then did nothing when clicked.
+        let hit =
+          prev.searchResults.find(matches) ?? Object.values(prev.refIndex).find(matches) ?? null
+
+        // Cold cache: a page that opens straight onto the workspace list has no
+        // tasks loaded, and a message can be rendered before resolveRefs has
+        // run over it. Ask the server rather than doing nothing.
+        if (!hit && /^[A-Z]{3}-\d+$/.test(taskIdOrRef)) {
+          const found = await run(() => api.search(taskIdOrRef), { quiet: true })
+          hit = found?.tasks.find(matches) ?? null
+        }
+
+        if (!hit) {
+          update({
+            error: `Could not open ${taskIdOrRef}. It may have been deleted, or be in a workspace you do not have access to.`,
+          })
+          return
+        }
 
         await loadWorkspace(hit.workspaceId, {
           screen: 'tasks',
