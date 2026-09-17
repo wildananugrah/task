@@ -9,18 +9,26 @@ export default function NewWorkspaceDialog() {
   const [name, setName] = useState('')
   const [prefix, setPrefix] = useState('')
   const [touched, setTouched] = useState(false)
+  const [creating, setCreating] = useState(false)
 
-  const valid = Boolean(name.trim()) && prefix.length === 3
+  const valid = Boolean(name.trim()) && prefix.length === 3 && !creating
 
   const hint =
     prefix.length === 3
       ? `Tasks will be numbered ${prefix}-101, ${prefix}-102, …`
       : 'Exactly 3 letters, e.g. PRF or TSK'
 
+  const create = async () => {
+    if (!valid) return
+    setCreating(true)
+    await actions.createWorkspace({ name, prefix })
+    setCreating(false)
+  }
+
   return (
     <Dialog onClose={actions.closeNewWorkspace} width={440} label="New workspace">
       <DialogHeader title="New workspace">
-        Every workspace keeps its own tasks, statuses and members.
+        Every workspace keeps its own tasks, statuses, members and team chat.
       </DialogHeader>
 
       <div className="flex flex-col gap-4 px-[22px] py-[18px]">
@@ -54,9 +62,9 @@ export default function NewWorkspaceDialog() {
 
       <DialogFooter
         onCancel={actions.closeNewWorkspace}
-        confirmLabel="Create workspace"
+        confirmLabel={creating ? 'Creating…' : 'Create workspace'}
         enabled={valid}
-        onConfirm={() => valid && actions.createWorkspace({ name, prefix })}
+        onConfirm={create}
       />
     </Dialog>
   )

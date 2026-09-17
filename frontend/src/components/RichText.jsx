@@ -1,17 +1,19 @@
 import { parseRichText } from '../lib/text'
+import { taskByRef } from '../lib/select'
 import { useApp } from '../state/useApp'
 
 /**
  * Renders comment and chat text with its @mentions highlighted and its
- * /TSK-104 references turned into links that open that task's drawer.
+ * /TSK-104 references turned into links that open that task's drawer. A
+ * reference only becomes a link when it names a task we can actually reach.
  */
 export default function RichText({ text, onDark = false }) {
   const { state, actions } = useApp()
   const parts = parseRichText(text)
 
   return parts.map((part) => {
-    const known = part.taskId ? state.tasks.some((task) => task.id === part.taskId) : false
-    const token = part.isMention || known
+    const target = part.taskRef ? taskByRef(state, part.taskRef) : null
+    const token = part.isMention || target
 
     if (!token) {
       return (
@@ -29,7 +31,7 @@ export default function RichText({ text, onDark = false }) {
       padding: '1px 4px',
     }
 
-    if (!known) {
+    if (!target) {
       return (
         <span key={part.key} style={style}>
           {part.value}
@@ -41,10 +43,10 @@ export default function RichText({ text, onDark = false }) {
       <button
         key={part.key}
         type="button"
-        title={`Open ${part.taskId}`}
+        title={`Open ${part.taskRef}`}
         onClick={(event) => {
           event.stopPropagation()
-          actions.revealTask(part.taskId)
+          actions.revealTask(target.id)
         }}
         style={style}
         className="cursor-pointer underline decoration-current underline-offset-2"

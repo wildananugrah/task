@@ -1,23 +1,32 @@
 import { useState } from 'react'
-import { ROLES, ROLE_HINT } from '../data/seed'
+import { ROLES, ROLE_HINT, ROLE_LABEL } from '../lib/constants'
 import { currentWorkspace } from '../lib/select'
-import { emailsFrom } from '../lib/text'
+import { emailsFrom } from '../lib/format'
 import { useApp } from '../state/useApp'
 import Dialog, { DialogFooter, DialogHeader, Field, inputClass } from './ui/Dialog'
 
 export default function InviteDialog() {
   const { state, actions } = useApp()
   const [emails, setEmails] = useState('')
-  const [role, setRole] = useState('Member')
+  const [role, setRole] = useState('member')
   const [note, setNote] = useState('')
+  const [sending, setSending] = useState(false)
 
   const workspace = currentWorkspace(state)
   const recipients = emailsFrom(emails)
 
+  const send = async () => {
+    if (!recipients.length || sending) return
+    setSending(true)
+    await actions.inviteMembers(recipients, role)
+    setSending(false)
+  }
+
   return (
     <Dialog onClose={actions.closeInvite} width={470} label="Invite people">
       <DialogHeader title={`Invite to ${workspace.name}`}>
-        They get an email with a join link. Invites stay pending until accepted.
+        The invite waits under their email address. It becomes membership the first time they sign
+        in with it.
       </DialogHeader>
 
       <div className="flex flex-col gap-4 px-[22px] py-[18px]">
@@ -56,7 +65,7 @@ export default function InviteDialog() {
                   }}
                   className="cursor-pointer rounded-[20px] border px-[13px] py-[7px] text-xs leading-none font-medium"
                 >
-                  {option}
+                  {ROLE_LABEL[option]}
                 </button>
               )
             })}
@@ -77,9 +86,9 @@ export default function InviteDialog() {
 
       <DialogFooter
         onCancel={actions.closeInvite}
-        confirmLabel="Send invites"
-        enabled={recipients.length > 0}
-        onConfirm={() => actions.inviteMembers(recipients, role)}
+        confirmLabel={sending ? 'Sending…' : 'Send invites'}
+        enabled={recipients.length > 0 && !sending}
+        onConfirm={send}
       />
     </Dialog>
   )

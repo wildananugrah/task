@@ -1,5 +1,5 @@
-import { CURRENT_USER } from '../data/seed'
-import { currentWorkspace, statusCounts, workspaceFileCount, workspaceTasks } from '../lib/select'
+import { ROLE_LABEL } from '../lib/constants'
+import { canAdmin, currentWorkspace, statusCounts, workspaceFileCount } from '../lib/select'
 import { useApp } from '../state/useApp'
 import Avatar from './ui/Avatar'
 import SearchField from './ui/SearchField'
@@ -29,10 +29,10 @@ function WorkspaceNav() {
   const { state, actions } = useApp()
   const workspace = currentWorkspace(state)
   const counts = statusCounts(state)
-  const tasks = workspaceTasks(state)
+  const admin = canAdmin(state)
 
   const nav = [
-    { key: 'tasks', label: 'Tasks', icon: '☰', count: tasks.length },
+    { key: 'tasks', label: 'Tasks', icon: '☰', count: state.tasks.length },
     { key: 'board', label: 'Board', icon: '▤', count: '' },
     { key: 'files', label: 'Files', icon: '◫', count: workspaceFileCount(state) },
     { key: 'settings', label: 'Workspace settings', icon: '⚙', count: '' },
@@ -58,9 +58,13 @@ function WorkspaceNav() {
           onClick={actions.goWorkspaces}
           className="flex w-full cursor-pointer items-center gap-2.5 rounded-[9px] border border-shell-ink/14 bg-shell-ink/5 px-2.5 py-[9px] text-left hover:bg-shell-ink/10"
         >
-          <div className="flex size-[26px] flex-none items-center justify-center rounded-[7px] bg-ink font-mono text-xs leading-none font-bold text-white">
-            {workspace.init}
-          </div>
+          <Avatar
+            init={workspace.initials}
+            color="#171717"
+            src={workspace.logoUrl}
+            size={26}
+            radius="7px"
+          />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="truncate text-[13px] leading-[1.2] font-semibold text-shell-ink">
               {workspace.name}
@@ -87,7 +91,9 @@ function WorkspaceNav() {
               onClick={() => go(item.key)}
               aria-current={isActive(item.key) ? 'page' : undefined}
               className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-[9px] py-2 text-left text-[13px] leading-none font-medium hover:bg-shell-ink/9 ${
-                isActive(item.key) ? 'bg-shell-ink/12 text-shell-ink' : 'bg-transparent text-shell-ink/66'
+                isActive(item.key)
+                  ? 'bg-shell-ink/12 text-shell-ink'
+                  : 'bg-transparent text-shell-ink/66'
               }`}
             >
               <span aria-hidden="true" className="w-[15px] text-center text-[12.5px] opacity-80">
@@ -124,37 +130,56 @@ function WorkspaceNav() {
               </span>
             </button>
           ))}
-          <GhostAction onClick={() => actions.goSettings('statuses')}>
-            ＋ Configure statuses
-          </GhostAction>
+          {admin && (
+            <GhostAction onClick={() => actions.goSettings('statuses')}>
+              ＋ Configure statuses
+            </GhostAction>
+          )}
         </div>
 
         <div className="flex flex-col gap-0.5">
           <SectionLabel>Members</SectionLabel>
-          {state.members.map((member) => (
-            <div key={member.id} className="flex items-center gap-[9px] px-[9px] py-1.5">
-              <span
-                style={{
-                  background: member.pending ? 'transparent' : member.color,
-                  border: member.pending ? '1.5px dashed rgba(237,237,235,.4)' : 'none',
-                }}
-                className="box-border flex size-5 flex-none items-center justify-center rounded-full font-mono text-[9px] leading-none font-semibold text-shell-ink"
-              >
-                {member.init}
-              </span>
-              <span
-                className={`min-w-0 flex-1 truncate text-[12.5px] leading-none ${
-                  member.pending ? 'text-shell-ink/55' : 'text-shell-ink/82'
-                }`}
-              >
-                {member.name}
-              </span>
-              <span className="font-mono text-[10px] leading-none text-shell-ink/40">
-                {member.pending ? 'Pending' : member.role}
-              </span>
-            </div>
-          ))}
-          <GhostAction onClick={actions.openInvite}>＋ Invite people</GhostAction>
+          {state.members.map((member) => {
+            const pending = member.status === 'pending'
+            const online = member.userId && state.online.includes(member.userId)
+            const self = member.userId === state.me?.id
+
+            return (
+              <div key={member.id} className="flex items-center gap-[9px] px-[9px] py-1.5">
+                <span className="relative flex flex-none">
+                  <Avatar
+                    init={member.initials}
+                    color={member.color}
+                    src={member.avatarUrl}
+                    size={20}
+                    pending={pending}
+                  />
+                  {online && (
+                    <span
+                      aria-hidden="true"
+                      title="Active now"
+                      className="absolute -right-px -bottom-px size-[7px] rounded-full border border-shell bg-[#4fa373]"
+                    />
+                  )}
+                </span>
+                <button
+                  type="button"
+                  disabled={pending || self}
+                  onClick={() => actions.startDm(member.userId)}
+                  title={self ? undefined : `Message ${member.name}`}
+                  className={`min-w-0 flex-1 truncate bg-transparent text-left text-[12.5px] leading-none ${
+                    pending ? 'text-shell-ink/55' : 'text-shell-ink/82'
+                  } ${pending || self ? 'cursor-default' : 'cursor-pointer hover:text-shell-ink'}`}
+                >
+                  {member.name}
+                </button>
+                <span className="font-mono text-[10px] leading-none text-shell-ink/40">
+                  {pending ? 'Pending' : ROLE_LABEL[member.role]}
+                </span>
+              </div>
+            )
+          })}
+          {admin && <GhostAction onClick={actions.openInvite}>＋ Invite people</GhostAction>}
         </div>
       </nav>
     </>
@@ -188,27 +213,28 @@ function HomeNav() {
 
         <div className="flex flex-col gap-0.5">
           <SectionLabel>Your workspaces</SectionLabel>
-          {state.workspaces.map((workspace) => {
-            const open = state.tasks.filter(
-              (task) => task.ws === workspace.id && task.status !== 'done',
-            ).length
-            return (
-              <button
-                key={workspace.id}
-                type="button"
-                onClick={() => actions.openWorkspace(workspace.id)}
-                className="flex cursor-pointer items-center gap-2.5 rounded-lg bg-transparent px-[9px] py-[7px] text-left hover:bg-shell-ink/9"
-              >
-                <Avatar init={workspace.init} color={workspace.color} size={20} radius="6px" />
-                <span className="min-w-0 flex-1 truncate text-[12.5px] leading-[1.2] text-shell-ink/82">
-                  {workspace.name}
-                </span>
-                <span className="font-mono text-[10.5px] leading-none text-shell-ink/40">
-                  {open}
-                </span>
-              </button>
-            )
-          })}
+          {state.cards.map((card) => (
+            <button
+              key={card.id}
+              type="button"
+              onClick={() => actions.openWorkspace(card.id)}
+              className="flex cursor-pointer items-center gap-2.5 rounded-lg bg-transparent px-[9px] py-[7px] text-left hover:bg-shell-ink/9"
+            >
+              <Avatar
+                init={card.initials}
+                color={card.color}
+                src={card.logoUrl}
+                size={20}
+                radius="6px"
+              />
+              <span className="min-w-0 flex-1 truncate text-[12.5px] leading-[1.2] text-shell-ink/82">
+                {card.name}
+              </span>
+              <span className="font-mono text-[10.5px] leading-none text-shell-ink/40">
+                {card.counts.open}
+              </span>
+            </button>
+          ))}
           <GhostAction onClick={actions.openNewWorkspace}>＋ New workspace</GhostAction>
         </div>
       </nav>
@@ -235,18 +261,25 @@ function GlobalSearchField() {
 
 export default function Sidebar() {
   const { state, actions } = useApp()
-  const inWorkspace = ['tasks', 'settings', 'files'].includes(state.screen)
+  const inWorkspace = ['tasks', 'settings', 'files'].includes(state.screen) && state.workspace
 
   return (
     <aside className="flex w-[250px] flex-none flex-col overflow-hidden bg-shell text-shell-ink">
       {inWorkspace ? <WorkspaceNav /> : <HomeNav />}
 
       <div className="flex items-center gap-[9px] border-t border-shell-ink/10 p-2.5">
-        <Avatar init={CURRENT_USER.init} color={CURRENT_USER.color} size={26} />
+        <Avatar
+          init={state.me?.initials ?? '??'}
+          color={state.me?.color ?? '#8c8c8c'}
+          src={state.me?.avatarUrl}
+          size={26}
+        />
         <span className="flex min-w-0 flex-1 flex-col gap-px">
-          <span className="text-[12.5px] leading-[1.2] font-medium">{CURRENT_USER.name}</span>
-          <span className="font-mono text-[10.5px] leading-none text-shell-ink/42">
-            {CURRENT_USER.email}
+          <span className="truncate text-[12.5px] leading-[1.2] font-medium">
+            {state.me?.name ?? ''}
+          </span>
+          <span className="truncate font-mono text-[10.5px] leading-none text-shell-ink/42">
+            {state.me?.email ?? ''}
           </span>
         </span>
         <button

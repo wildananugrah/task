@@ -1,4 +1,4 @@
-import { currentWorkspace, filteredTasks, hasActiveFilter, workspaceTasks } from '../lib/select'
+import { canEdit, currentWorkspace, filteredTasks, hasActiveFilter } from '../lib/select'
 import { useApp } from '../state/useApp'
 import FilterBar from './FilterBar'
 import TaskBoardView from './TaskBoardView'
@@ -33,9 +33,8 @@ export default function TasksScreen() {
   const { state, actions } = useApp()
   const workspace = currentWorkspace(state)
   const tasks = filteredTasks(state)
-  const all = workspaceTasks(state)
 
-  const workspaceEmpty = all.length === 0 && !state.query
+  const workspaceEmpty = state.tasks.length === 0 && !state.query && !state.loading
   const noMatches = tasks.length === 0 && !workspaceEmpty && hasActiveFilter(state)
 
   return (
@@ -45,18 +44,20 @@ export default function TasksScreen() {
           <div className="flex items-baseline gap-2.5">
             <h1 className="m-0 text-xl leading-[1.2] font-semibold tracking-[-.015em]">Tasks</h1>
             <span className="font-mono text-xs leading-none text-ink/45">
-              {workspace.name} · {tasks.length} shown
+              {workspace.name} · {state.loading ? 'loading…' : `${tasks.length} shown`}
             </span>
           </div>
           <div className="flex items-center gap-[9px]">
             <ViewToggle />
-            <button
-              type="button"
-              onClick={() => actions.createTask(null)}
-              className="cursor-pointer rounded-lg bg-ink px-3.5 py-2 text-[12.5px] leading-none font-semibold text-white hover:bg-ink-strong"
-            >
-              ＋ New task
-            </button>
+            {canEdit(state) && (
+              <button
+                type="button"
+                onClick={() => actions.createTask(null)}
+                className="cursor-pointer rounded-lg bg-ink px-3.5 py-2 text-[12.5px] leading-none font-semibold text-white hover:bg-ink-strong"
+              >
+                ＋ New task
+              </button>
+            )}
           </div>
         </div>
 

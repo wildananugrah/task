@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { hasActiveFilter, statusCounts, workspaceTasks } from '../lib/select'
+import { hasActiveFilter, statusCounts } from '../lib/select'
 import { useApp } from '../state/useApp'
 import SearchField from './ui/SearchField'
 
@@ -126,7 +126,6 @@ export default function FilterBar() {
   }, [openFilter])
 
   const counts = statusCounts(state)
-  const tasks = workspaceTasks(state)
 
   const filters = [
     {
@@ -145,12 +144,14 @@ export default function FilterBar() {
       label: 'Assignee',
       value: state.assigneeFilter,
       searchable: true,
-      options: state.members.map((member) => ({
-        label: member.name,
-        value: member.id,
-        dot: member.color,
-        sub: member.email,
-      })),
+      options: state.members
+        .filter((member) => member.userId)
+        .map((member) => ({
+          label: member.name,
+          value: member.userId,
+          dot: member.color,
+          sub: member.email,
+        })),
     },
     {
       key: 'labelFilter',
@@ -158,21 +159,23 @@ export default function FilterBar() {
       value: state.labelFilter,
       searchable: true,
       options: state.labels.map((label) => ({
-        label,
-        value: label,
-        sub: `${tasks.filter((task) => task.labels.includes(label)).length} tasks`,
+        label: label.name,
+        value: label.name,
+        sub: `${state.tasks.filter((task) => task.labels.includes(label.name)).length} tasks`,
       })),
     },
     {
+      // Real dates, so these are relative to today rather than the two month
+      // names the mock data happened to use.
       key: 'dueFilter',
       label: 'Due date',
       value: state.dueFilter,
       options: [
         { label: 'Overdue', value: 'overdue' },
+        { label: 'Due in 7 days', value: 'week' },
+        { label: 'Due this month', value: 'month' },
         { label: 'Has a due date', value: 'set' },
         { label: 'No due date', value: 'none' },
-        { label: 'September', value: 'sep' },
-        { label: 'October', value: 'oct' },
       ],
     },
   ]

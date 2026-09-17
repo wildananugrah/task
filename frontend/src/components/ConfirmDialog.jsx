@@ -1,32 +1,34 @@
 import { useState } from 'react'
-import { currentWorkspace, selectedTask, workspaceTasks } from '../lib/select'
+import { currentWorkspace, selectedTask } from '../lib/select'
 import { useApp } from '../state/useApp'
 import Dialog, { DialogFooter, Field, inputClass } from './ui/Dialog'
 
 export default function ConfirmDialog() {
   const { state, actions } = useApp()
   const [typed, setTyped] = useState('')
+  const [running, setRunning] = useState(false)
 
   const kind = state.confirm
   const workspace = currentWorkspace(state)
   const task = selectedTask(state)
-  const total = workspaceTasks(state).length
+  const detail = task ? state.details[task.id] : null
+  const total = state.tasks.length
 
   const copy = {
     task: {
-      title: `Delete ${task?.id ?? ''}?`,
-      body: `“${task?.title ?? ''}” will be removed along with its ${task?.files.length ?? 0} files and ${
-        task?.comments.length ?? 0
-      } comments. This cannot be undone.`,
+      title: `Delete ${task?.ref ?? ''}?`,
+      body: `“${task?.title ?? ''}” will be removed along with its ${
+        detail?.files.length ?? task?.fileCount ?? 0
+      } files and ${detail?.comments.length ?? task?.commentCount ?? 0} comments. This cannot be undone.`,
       cta: 'Delete task',
     },
     archive: {
-      title: `Archive ${workspace.name}?`,
+      title: `Archive ${workspace?.name ?? ''}?`,
       body: `The workspace and its ${total} tasks are hidden from everyone. An admin can restore it later.`,
       cta: 'Archive workspace',
     },
     delete: {
-      title: `Delete ${workspace.name}?`,
+      title: `Delete ${workspace?.name ?? ''}?`,
       body: `This permanently removes the workspace, its ${total} tasks, their files and comments. This cannot be undone.`,
       cta: 'Delete workspace',
     },
@@ -37,7 +39,15 @@ export default function ConfirmDialog() {
     actions.cancelConfirm()
   }
 
-  const enabled = kind !== 'delete' || typed.trim() === workspace.name
+  const enabled = (kind !== 'delete' || typed.trim() === workspace?.name) && !running
+
+  const confirm = async () => {
+    if (!enabled) return
+    setRunning(true)
+    await actions.runConfirm()
+    setTyped('')
+    setRunning(false)
+  }
 
   return (
     <Dialog onClose={close} width={420} scrim={40} zIndex={74} label={copy.title}>
@@ -54,7 +64,7 @@ export default function ConfirmDialog() {
             <input
               value={typed}
               onChange={(event) => setTyped(event.target.value)}
-              placeholder={workspace.name}
+              placeholder={workspace?.name}
               className={inputClass}
             />
           </Field>
@@ -63,13 +73,9 @@ export default function ConfirmDialog() {
 
       <DialogFooter
         onCancel={close}
-        confirmLabel={copy.cta}
+        confirmLabel={running ? 'Working…' : copy.cta}
         enabled={enabled}
-        onConfirm={() => {
-          if (!enabled) return
-          setTyped('')
-          actions.runConfirm()
-        }}
+        onConfirm={confirm}
       />
     </Dialog>
   )

@@ -4,75 +4,124 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What is actually here
 
-Only `frontend/` contains code. `backend/`, `infra/`, `docs/` and `ws/` are empty
-directories — placeholders, not modules you have failed to find.
+`frontend/` (React), `backend/` (Bun + Hono + Drizzle API), `ws/` (Bun WebSocket
+chat), `infra/` (compose file, env template, runbook) and `docs/SPEC.md`. All
+four are real; none of them are placeholders any more.
 
 `deploy/` and `scripts/deploy.sh` were **inherited from a different product** (a
 streaming app on the same domain) and were never rewritten for this one. They
-describe a Bun/Postgres API on `:3004`, MediaMTX/HLS playback, pm2 and
-`communities`/`streams` routes — none of which exist in this repo. Read them as
-history, not as documentation of this app:
+describe MediaMTX/HLS playback, pm2 and `communities`/`streams` routes — none of
+which exist in this repo. The `:3004` and `/api` parts happen to line up with
+this app's API because the API was given that port deliberately; everything else
+is history, not documentation:
 
-- `scripts/deploy.sh` aborts in preflight without `backend/.env` and `infra/.env`,
-  neither of which this repo ships.
+- `scripts/deploy.sh` aborts in preflight without `backend/.env` and `infra/.env`
+  in the shapes *it* expects, which are not the shapes this repo ships.
 - `deploy/notes.md` talks about "two hostnames"; both names in it are the same
   string, left over from a find-and-replace.
 - `deploy/nginx/task.mhamzah.id` carries live legacy proxy blocks its own
   comments mark as dead.
 
-Do not "fix" these to match the frontend unless asked — they are production
-routing for a box this repo does not otherwise describe.
+Do not "fix" these — they are production routing for a box this repo does not
+otherwise describe. `infra/nginx/taskspace.conf.example` is this app's block.
 
 ## Commands
 
-All of these run from `frontend/`:
+Root (a Bun workspace over `backend/` and `ws/`):
+
+```bash
+bun install
+bun run dev:api      # API with reload, :3004
+bun run dev:ws       # chat socket with reload, :3005
+bun run db:push      # apply backend/drizzle/*.sql
+bun run db:seed      # demo data; idempotent
+bun test             # backend suite, against <database>_test
+```
+
+From `backend/`: `bun run db:generate` after editing the schema, `bun run
+db:reset` to drop and rebuild, `bun run files:sweep` for unconfirmed uploads.
+
+From `frontend/`:
 
 ```bash
 npm install
-npm run dev       # vite dev server
+npm run dev       # vite dev server, :5173, proxies /api to the backend
 npm run build     # production bundle into frontend/dist
 npm run lint      # oxlint; must be silent, warnings included
 npm run preview   # serve the built bundle
 ```
 
-There is **no test runner configured** — no vitest, no jest, no test script. If
-you need to prove a change works beyond `lint` and `build`, the cheapest real
+Services come up with `docker compose -f infra/docker-compose.yml --env-file
+infra/.env up -d`. `infra/README.md` is the runbook, including which variables to
+change when 3004/3005/5432/9000 are already taken on the machine.
+
+**The frontend has no test runner.** Beyond `lint` and `build`, the cheapest real
 check is an SSR smoke render: build a temporary entry with
-`npx vite build --ssr <entry>.jsx --outDir .smoke`, `renderToString` each screen
-inside `<AppProvider>`, run it with `node`, then delete the entry and `.smoke`.
-The output directory must stay inside `frontend/` or Node cannot resolve `react-dom`.
+`npx vite build --ssr <entry>.jsx --outDir .smoke`, render each screen inside an
+`AppContext.Provider` holding a state snapshot (the components read the store,
+not the network, so a snapshot is enough), run it with `node`, then delete the
+entry and `.smoke`. The output directory must stay inside `frontend/` or Node
+cannot resolve `react-dom`. That catches render crashes but not effects — a
+module-ordering bug in `AppProvider` passed the smoke render and only showed up
+in a browser, so drive the real app for anything touching the store.
 
-`scripts/deploy.sh` is not runnable here (see above).
+## Architecture
 
-## Frontend architecture
+`docs/SPEC.md` is the full picture. In short:
 
-React 19 + Vite 8 + Tailwind CSS v4, plain JSX — no TypeScript, no router, no
-data layer. It is a **working prototype**: every task, member, file and message is
-generated once in `src/data/seed.js`, nothing is persisted, and a reload resets
-everything.
+```
+browser ──/api/*──────────► backend :3004 ──► postgres
+        ──/ws?ticket=…────► ws :3005      ──► postgres
+        ──PUT/GET presigned──────────────────► S3 bucket
+```
 
-State lives in one place and derivations live in another:
+Load-bearing decisions, each of which has a comment at its site:
 
-- `src/state/AppProvider.jsx` holds the entire app state object plus every action
-  that mutates it. Actions are grouped by area (session, navigation, tasks,
-  statuses, labels, members, workspaces, dialogs, messaging).
-- `src/state/context.js` and `src/state/useApp.js` are split out from the provider
-  so `only-export-components` stays quiet. `useApp()` returns `{ state, actions }`.
-- `src/lib/select.js` derives everything read-only — filtered tasks, status
-  counts, workspace summaries, file lists. Components call these rather than the
-  store growing a view model.
+- **Task ids are derived**, never stored: `prefix + '-' + number`. That is what
+  makes changing a workspace's prefix renumber everything for free.
+- **Task numbers** come from `max()+1` under a transaction-scoped advisory lock
+  keyed on the workspace. An earlier version retried on the unique-index
+  violation instead and silently did not work — Drizzle wraps the driver error,
+  so the constraint name was not in the message the retry matched on.
+- **Files never pass through the API**: presign → the browser `PUT`s the bytes →
+  confirm. Rows stay `pending`, and invisible to every read, until that confirm.
+- **The socket fans out per person** (`user:<id>`), not per conversation.
+  Conversation topics delivered twice to anyone reachable both ways and left a
+  socket deaf to a DM opened after it connected.
+- **Sessions are an httpOnly cookie**; the socket takes a separate 60-second
+  ticket because the cookie does not cross the port boundary.
+- **Roles are enforced in `src/lib/access.ts` and nowhere else.** A workspace you
+  are not in is a 404, not a 403 — membership is not something to probe for.
+
+## Frontend
+
+React 19 + Vite 8 + Tailwind CSS v4, plain JSX — no TypeScript, no router.
+
+- `src/lib/api.js` is the only module that calls the API; it throws `ApiError`
+  carrying the server's own `code`.
+- `src/lib/socket.js` is the chat socket with backoff reconnect.
+- `src/state/AppProvider.jsx` holds the whole state object and every action.
+  Actions are async and grouped by area (session, navigation, browsing, tasks,
+  statuses, labels, members, workspaces, dialogs, messaging). Every write goes
+  through `run()`, which turns a failure into `state.error` rather than silence.
+- `src/state/context.js` and `src/state/useApp.js` are split out from the
+  provider so `only-export-components` stays quiet. `useApp()` returns
+  `{ state, actions }`.
+- `src/lib/select.js` derives everything read-only, `src/lib/format.js` does all
+  display formatting (dates, sizes, relative times).
 - **Transient UI state stays local to the component that owns it**: open filter
-  dropdown, colour picker, role menu, label draft, comment/chat drafts, drag-over.
-  Only state that two distant components share is in the store.
+  dropdown, colour picker, role menu, label draft, comment/chat drafts, drag
+  state. Only state two distant components share is in the store.
 
-Screens switch on `state.screen` (`login` / `workspaces` / `tasks` / `files` /
-`settings`) inside `src/App.jsx`. There is no URL routing, so nothing is
-linkable and back/forward do nothing.
+Screens switch on `state.screen` (`loading` / `login` / `workspaces` / `tasks` /
+`files` / `settings`) inside `src/App.jsx`. There is no URL routing; the last
+workspace is remembered in `localStorage` so a reload keeps your place.
 
-`revealTask(taskId)` is the one cross-cutting action: `/TSK-104` references in
-comments and chat, plus global search hits, jump to that task's workspace and
-open its drawer. `src/components/RichText.jsx` renders those tokens and only
-links the ones that resolve to a real task.
+`revealTask(idOrRef)` is the cross-cutting action: `/TSK-104` references and
+global search hits jump to that task's workspace and open its drawer, loading
+the workspace first if it is a different one. `RichText.jsx` renders those
+tokens and only links ones that resolve — the store resolves refs from other
+workspaces through search and caches them in `state.refIndex`.
 
 ## Design source and tokens
 
@@ -84,7 +133,7 @@ Tokens are Tailwind v4 `@theme` entries in `src/index.css`. The palette is
 deliberately near-monochrome: one `--color-ink` used at many opacities carries
 every hairline, muted label and scrim, so `border-ink/9` and `text-ink/55` are
 the normal way to write those — not new tokens. Status colours are per-workspace
-state, not theme tokens; they are edited at runtime in workspace settings.
+rows in the database, not theme tokens; they are edited at runtime in settings.
 
 The design's three editor props (accent, density, default view) are constants in
 `src/lib/config.js`.
@@ -109,11 +158,27 @@ is no icon library.
   rather than trusting that it compiled — Tailwind does not error on a class it
   cannot generate.
 
+## Backend conventions
+
+- Every failure goes through `src/lib/errors.ts`, which produces
+  `{ error: { code, message, detail } }`. Those helpers are **function
+  declarations returning `never`** on purpose: as arrows, TypeScript will not
+  narrow after `if (!user) unauthorized()`.
+- Request bodies are parsed with a Zod schema through `src/lib/validate.ts`, so a
+  bad body is always the same 400 with the offending field named.
+- Row → wire conversion lives in `src/lib/shape.ts` and nowhere else.
+- Reads that serve a whole screen live in `src/lib/queries.ts` and are written to
+  avoid a query per row.
+- Drizzle's `date` column comes back from Bun's driver as a `Date`, which
+  serialises as UTC midnight and reads as the previous day west of London. The
+  `calendarDate` custom type in `schema.ts` is why due dates stay `YYYY-MM-DD`.
+
 ## Conventions
 
 - Exact pixel values from the design are kept as arbitrary values
   (`text-[12.5px]`, `gap-[9px]`) rather than rounded to the nearest scale step.
 - Comments explain *why* a non-obvious decision was made, not what the line does.
   Match that density; most components carry none.
-- Adjusting state during render (the `draftFor` pattern in `TaskDrawer.jsx`) is
-  preferred over a `useState` + `useEffect` sync pair, which oxlint flags.
+- Adjusting state during render (the `draftFor` pattern in `TaskDrawer.jsx`, the
+  `preview.for` pattern in `FilePreviewDialog.jsx`) is preferred over a
+  `useState` + `useEffect` sync pair, which oxlint flags.

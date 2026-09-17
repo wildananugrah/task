@@ -1,46 +1,94 @@
-import { useState } from 'react'
-import { THREAD_IDENTITY } from '../data/seed'
+import { useEffect, useRef, useState } from 'react'
+import { formatShortWhen, initialsFrom } from '../lib/format'
 import { mentionHeader, mentionItems } from '../lib/mentions'
-import { memberOf } from '../lib/select'
 import { replaceTrailingToken, trailingToken } from '../lib/text'
 import { useApp } from '../state/useApp'
 import MentionMenu from './MentionMenu'
 import RichText from './RichText'
 import Avatar from './ui/Avatar'
 
-function identityFor(state, threadId) {
-  const identity = THREAD_IDENTITY[threadId] || { memberId: threadId }
-  const member = memberOf(state, identity.memberId)
+/**
+ * A conversation is named after whoever else is in it. The server already
+ * resolves that, so the client only has to pick the avatar — the other person
+ * for a DM, the workspace initials for a team room.
+ */
+function identityFor(state, conversation) {
+  const others = conversation.participants.filter((person) => person.id !== state.me?.id)
+  const dm = conversation.kind === 'dm'
+  const face = others[0]
+
+  const online = dm
+    ? Boolean(face && state.online.includes(face.id))
+    : others.some((person) => state.online.includes(person.id))
+
   return {
-    name: identity.name || member.name,
-    init: identity.init || member.init,
-    color: identity.color || member.color,
-    presence: identity.presence || 'Active now',
+    name: conversation.title,
+    // A team room wears its workspace's initials — "Work workspace" is WW, the
+    // way it reads everywhere else, not the first two letters of the string.
+    init: dm ? (face?.initials ?? '??') : initialsFrom(conversation.title ?? 'Team'),
+    color: dm ? (face?.color ?? '#8c8c8c') : '#1f7a5a',
+    src: dm ? face?.avatarUrl : null,
+    online,
+    presence: dm
+      ? online
+        ? 'Active now'
+        : 'Offline'
+      : `${conversation.participants.length} members`,
   }
 }
 
-function ChatWindow({ threadId }) {
+function ChatWindow({ conversation }) {
   const { state, actions } = useApp()
   const [text, setText] = useState('')
-  const identity = identityFor(state, threadId)
+  const scroller = useRef(null)
+  const lastTyping = useRef(0)
+
+  const identity = identityFor(state, conversation)
+  const messages = state.messages[conversation.id] ?? []
   const token = trailingToken(text)
   const items = mentionItems(state, token, 'all')
+  // The store expires typing entries on a timer, so their presence is the whole
+  // signal — reading a clock during render would make this unstable.
+  const peerTyping = Boolean(state.typing[conversation.id])
+
+  // Pinned to the newest message, the way a chat window is expected to open.
+  useEffect(() => {
+    const node = scroller.current
+    if (node) node.scrollTop = node.scrollHeight
+  }, [messages.length, peerTyping])
 
   const send = () => {
     const trimmed = text.trim()
     if (!trimmed) return
-    actions.sendMessage(threadId, trimmed)
+    actions.sendMessage(conversation.id, trimmed)
     setText('')
+  }
+
+  const onType = (value) => {
+    setText(value)
+    // One typing frame per second is enough to keep the indicator alive.
+    if (Date.now() - lastTyping.current > 1000) {
+      lastTyping.current = Date.now()
+      actions.notifyTyping(conversation.id)
+    }
   }
 
   return (
     <div className="flex h-[430px] w-[328px] animate-pop-in flex-col overflow-hidden rounded-t-xl border border-ink/12 bg-panel shadow-[0_-4px_28px_rgba(23,23,23,.16)]">
       <div className="flex items-center gap-[9px] border-b border-ink/9 bg-subtle px-3 py-2.5">
-        <Avatar init={identity.init} color={identity.color} size={26} />
+        <span className="relative flex flex-none">
+          <Avatar init={identity.init} color={identity.color} src={identity.src} size={26} />
+          {identity.online && (
+            <span
+              aria-hidden="true"
+              className="absolute -right-px -bottom-px size-[8px] rounded-full border-2 border-subtle bg-[#4fa373]"
+            />
+          )}
+        </span>
         <span className="flex min-w-0 flex-1 flex-col gap-px">
           <span className="truncate text-[13px] leading-[1.2] font-semibold">{identity.name}</span>
           <span className="font-mono text-[10.5px] leading-none text-ink/50">
-            {identity.presence}
+            {peerTyping ? 'typing…' : identity.presence}
           </span>
         </span>
         <button
@@ -53,23 +101,42 @@ function ChatWindow({ threadId }) {
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 py-3.5">
-        {(state.convos[threadId] || []).map((message, index) => (
-          <div
-            key={index}
-            className={`flex ${message.me ? 'justify-end' : 'justify-start'}`}
-          >
-            <span
-              style={{
-                background: message.me ? '#1f1f1f' : '#f2f2f1',
-                color: message.me ? '#ededeb' : '#171717',
-              }}
-              className="max-w-[84%] rounded-xl px-[11px] py-[9px] text-[13px] leading-[1.55] text-pretty"
-            >
-              <RichText text={message.text} onDark={message.me} />
-            </span>
-          </div>
-        ))}
+      <div
+        ref={scroller}
+        role="log"
+        aria-live="polite"
+        aria-label={`Conversation with ${identity.name}`}
+        className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto px-3 py-3.5"
+      >
+        {messages.length === 0 && (
+          <span className="py-6 text-center text-[12.5px] leading-[1.5] text-ink/45">
+            No messages yet. Say something — @ mentions and /TSK links both work here.
+          </span>
+        )}
+
+        {messages.map((message) => {
+          const mine = message.author?.id === state.me?.id
+          return (
+            <div key={message.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+              <span
+                style={{
+                  background: mine ? '#1f1f1f' : '#f2f2f1',
+                  color: mine ? '#ededeb' : '#171717',
+                  opacity: message.pending ? 0.6 : 1,
+                }}
+                className="max-w-[84%] rounded-xl px-[11px] py-[9px] text-[13px] leading-[1.55] text-pretty"
+                title={message.pending ? 'Sending…' : undefined}
+              >
+                {!mine && conversation.kind === 'group' && (
+                  <span className="mb-0.5 block text-[10.5px] leading-none font-semibold text-ink/50">
+                    {message.author?.name ?? 'Someone'}
+                  </span>
+                )}
+                <RichText text={message.body} onDark={mine} />
+              </span>
+            </div>
+          )
+        })}
       </div>
 
       {token && items.length > 0 && (
@@ -84,7 +151,7 @@ function ChatWindow({ threadId }) {
       <div className="flex items-end gap-2 border-t border-ink/9 px-[11px] py-2.5">
         <input
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => onType(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') {
               event.preventDefault()
@@ -110,12 +177,20 @@ function ChatWindow({ threadId }) {
 
 export default function ChatDock() {
   const { state, actions } = useApp()
-  const unread = state.threads.filter((thread) => thread.unread).length
+  if (!state.me) return null
+
+  const unread = state.conversations.reduce(
+    (total, conversation) => total + (conversation.unread > 0 ? 1 : 0),
+    0,
+  )
+  const open = state.conversations.filter((conversation) =>
+    state.chatOpen.includes(conversation.id),
+  )
 
   return (
     <div className="fixed right-[22px] bottom-0 z-40 flex items-end gap-3.5">
-      {state.chatOpen.map((threadId) => (
-        <ChatWindow key={threadId} threadId={threadId} />
+      {open.map((conversation) => (
+        <ChatWindow key={conversation.id} conversation={conversation} />
       ))}
 
       <div className="flex w-[300px] flex-col overflow-hidden rounded-t-xl border border-ink/12 bg-panel shadow-[0_-4px_24px_rgba(23,23,23,.12)]">
@@ -134,6 +209,14 @@ export default function ChatDock() {
               {unread}
             </span>
           )}
+          {/* The socket's state is worth showing: a dot that is not green means
+              messages are going over HTTP instead of arriving live. */}
+          <span
+            aria-hidden="true"
+            title={state.socketStatus === 'online' ? 'Live' : 'Reconnecting…'}
+            style={{ background: state.socketStatus === 'online' ? '#4fa373' : '#8a6d1f' }}
+            className="size-[6px] rounded-full"
+          />
           <span aria-hidden="true" className="text-[11px] text-shell-ink/60">
             {state.dockOpen ? '⌄' : '⌃'}
           </span>
@@ -141,46 +224,76 @@ export default function ChatDock() {
 
         {state.dockOpen && (
           <div className="max-h-[296px] overflow-y-auto">
-            {state.threads.map((thread) => {
-              const identity = identityFor(state, thread.id)
-              const open = state.chatOpen.includes(thread.id)
+            {state.conversations.map((conversation) => {
+              const identity = identityFor(state, conversation)
+              const active = state.chatOpen.includes(conversation.id)
+              const unreadHere = conversation.unread > 0
+
               return (
                 <button
-                  key={thread.id}
+                  key={conversation.id}
                   type="button"
-                  onClick={() => actions.openThread(thread.id)}
+                  onClick={() => actions.openThread(conversation.id)}
+                  aria-label={`Open conversation: ${identity.name}`}
                   className={`flex w-full cursor-pointer items-center gap-2.5 border-b border-b-ink/6 px-[13px] py-[11px] text-left hover:bg-canvas ${
-                    open ? 'bg-canvas' : 'bg-panel'
+                    active ? 'bg-canvas' : 'bg-panel'
                   }`}
                 >
-                  <Avatar init={identity.init} color={identity.color} size={30} />
+                  <span className="relative flex flex-none">
+                    <Avatar
+                      init={identity.init}
+                      color={identity.color}
+                      src={identity.src}
+                      size={30}
+                    />
+                    {identity.online && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute -right-px -bottom-px size-[9px] rounded-full border-2 border-panel bg-[#4fa373]"
+                      />
+                    )}
+                  </span>
                   <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
                     <span className="flex items-baseline gap-1.5">
                       <span
                         className={`min-w-0 flex-1 truncate text-[12.5px] leading-[1.2] ${
-                          thread.unread ? 'font-semibold' : 'font-normal'
+                          unreadHere ? 'font-semibold' : 'font-normal'
                         }`}
                       >
                         {identity.name}
                       </span>
                       <span className="font-mono text-[10px] leading-none text-ink/40">
-                        {thread.when}
+                        {formatShortWhen(conversation.lastMessage?.createdAt)}
                       </span>
                     </span>
                     <span
                       className={`truncate text-[11.5px] leading-[1.3] ${
-                        thread.unread ? 'font-medium text-ink/75' : 'font-normal text-ink/50'
+                        unreadHere ? 'font-medium text-ink/75' : 'font-normal text-ink/50'
                       }`}
                     >
-                      {thread.preview}
+                      {conversation.lastMessage
+                        ? `${
+                            conversation.lastMessage.author?.id === state.me?.id
+                              ? 'You: '
+                              : conversation.kind === 'group'
+                                ? `${conversation.lastMessage.author?.name ?? ''}: `
+                                : ''
+                          }${conversation.lastMessage.body}`
+                        : 'No messages yet'}
                     </span>
                   </span>
-                  {thread.unread && (
+                  {unreadHere && (
                     <span aria-hidden="true" className="size-[7px] flex-none rounded-full bg-ink" />
                   )}
                 </button>
               )
             })}
+
+            {state.conversations.length === 0 && (
+              <div className="px-3.5 py-6 text-center text-[12.5px] leading-[1.5] text-ink/50">
+                No conversations yet. Click a teammate in the sidebar to start one.
+              </div>
+            )}
           </div>
         )}
       </div>

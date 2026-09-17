@@ -1,3 +1,4 @@
+import { fileMeta } from '../lib/format'
 import { currentWorkspace, workspaceFileCount, workspaceFiles } from '../lib/select'
 import { useApp } from '../state/useApp'
 import SearchField from './ui/SearchField'
@@ -32,7 +33,7 @@ export default function FilesScreen() {
       <div className="flex max-w-[900px] flex-col gap-[9px] px-9 pt-5 pb-11">
         {files.map((file) => (
           <button
-            key={`${file.taskId}-${file.index}`}
+            key={file.id}
             type="button"
             onClick={() => actions.openPreview(file)}
             className="flex cursor-pointer items-center gap-[13px] rounded-[10px] border border-ink/9 bg-panel px-3.5 py-3 text-left hover:border-ink/28"
@@ -42,11 +43,13 @@ export default function FilesScreen() {
             </span>
             <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
               <span className="truncate text-[13px] leading-[1.25] font-medium">{file.name}</span>
-              <span className="font-mono text-[11px] leading-none text-ink/45">{file.meta}</span>
+              <span className="font-mono text-[11px] leading-none text-ink/45">
+                {fileMeta(file)}
+              </span>
             </span>
             <span className="flex max-w-[280px] flex-none items-center gap-2">
               <span className="font-mono text-[11px] leading-none font-medium text-ink/45">
-                {file.taskId}
+                {file.taskRef}
               </span>
               <span className="truncate text-[12.5px] leading-[1.2] text-ink/60">
                 {file.taskTitle}

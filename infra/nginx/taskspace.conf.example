@@ -1,0 +1,62 @@
+# Reference server block for Taskspace. NOT installed by anything in this repo —
+# deploy/nginx/ is production routing for a different product on the same box and
+# is deliberately left alone (see CLAUDE.md). Use this if that host is ever
+# repointed at this app.
+#
+# Two prefixes reach a process; everything else is the SPA bundle.
+#   /api/  → backend  :3004
+#   /ws    → ws       :3005   (needs the Upgrade headers, or it 400s)
+
+server {
+  listen 443 ssl;
+  listen [::]:443 ssl;
+  server_name taskspace.example.com;
+
+  ssl_certificate     /etc/letsencrypt/live/taskspace.example.com/fullchain.pem;
+  ssl_certificate_key /etc/letsencrypt/live/taskspace.example.com/privkey.pem;
+
+  root /var/www/html/taskspace/dist;
+  index index.html;
+
+  add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+  gzip on;
+  gzip_types text/plain text/css application/json application/javascript image/svg+xml;
+
+  # Vite content-hashes these, so they can be cached forever.
+  location /assets/ {
+    expires 1y;
+    add_header Cache-Control "public, immutable";
+  }
+
+  # `^~` so no regex location can claim it first.
+  location ^~ /api/ {
+    proxy_pass http://127.0.0.1:3004;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
+  # File bytes do NOT come through here — uploads and downloads are presigned
+  # straight to the bucket — so no client_max_body_size bump is needed.
+
+  location ^~ /ws {
+    proxy_pass http://127.0.0.1:3005;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    # A chat socket is idle between messages; the default 60s would cut it.
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+  }
+
+  location / {
+    try_files $uri $uri/ /index.html;
+  }
+}

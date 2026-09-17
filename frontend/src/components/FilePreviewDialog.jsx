@@ -1,123 +1,195 @@
-import { FILE_PREVIEW_LINES, FILE_PREVIEW_ROWS } from '../data/seed'
+import { useEffect, useState } from 'react'
+import { api } from '../lib/api'
+import { fileMeta } from '../lib/format'
 import { useApp } from '../state/useApp'
 import Dialog from './ui/Dialog'
 
-const IMAGE = ['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'SVG']
-const SHEET = ['XLS', 'XLSX', 'CSV']
-const TEXT = ['MD', 'TXT', 'JSON', 'LOG', 'DOC', 'DOCX']
+const IMAGE = ['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'SVG', 'AVIF', 'BMP']
+const TEXT = ['MD', 'TXT', 'JSON', 'LOG', 'CSV', 'YML', 'YAML', 'XML', 'SQL']
 
-function kindOf(ext) {
-  if (IMAGE.includes(ext)) return { key: 'image', label: 'Image' }
-  if (ext === 'PDF') return { key: 'pdf', label: 'Document · 4 pages' }
-  if (SHEET.includes(ext)) return { key: 'sheet', label: 'Spreadsheet · Sheet 1 of 2' }
-  if (TEXT.includes(ext)) return { key: 'text', label: 'Text' }
+function kindOf(file) {
+  const ext = file.ext?.toUpperCase() ?? ''
+  if (IMAGE.includes(ext) || file.contentType?.startsWith('image/')) {
+    return { key: 'image', label: 'Image' }
+  }
+  if (ext === 'PDF' || file.contentType === 'application/pdf') {
+    return { key: 'pdf', label: 'Document' }
+  }
+  if (ext === 'CSV') return { key: 'csv', label: 'Spreadsheet' }
+  if (TEXT.includes(ext) || file.contentType?.startsWith('text/')) {
+    return { key: 'text', label: 'Text' }
+  }
   return { key: 'other', label: 'File' }
 }
 
-function Body({ file, kind }) {
+/** Anything larger is offered as a download rather than fetched into the page. */
+const TEXT_PREVIEW_LIMIT = 512 * 1024
+
+function Fallback({ children }) {
+  return (
+    <div className="flex w-full max-w-[420px] flex-col items-center gap-[9px] rounded-[10px] border border-ink/12 bg-panel px-6 py-11 text-center">
+      {children}
+    </div>
+  )
+}
+
+function CsvTable({ text }) {
+  // Deliberately simple: a preview, not a parser. Quoted commas are rare in the
+  // files this shows and getting them wrong costs a misaligned cell, not data.
+  const rows = text
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(0, 60)
+    .map((line) => line.split(','))
+
+  return (
+    <div className="w-full max-w-[680px] overflow-x-auto rounded-lg border border-ink/12 bg-panel">
+      {rows.map((cells, rowIndex) => (
+        <div
+          key={rowIndex}
+          className={`flex border-b border-ink/8 ${rowIndex === 0 ? 'bg-canvas' : 'bg-panel'}`}
+        >
+          {cells.map((cell, cellIndex) => (
+            <span
+              key={cellIndex}
+              className={`min-w-[120px] flex-1 border-r border-ink/7 px-3 py-2.5 text-[12.5px] leading-[1.3] text-ink/80 ${
+                rowIndex === 0 ? 'font-semibold' : 'font-normal'
+              }`}
+            >
+              {cell}
+            </span>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Real previews of the real object, on a short-lived presigned URL. The
+ * prototype drew a picture of each file type; this fetches it.
+ */
+function Body({ file, kind, url, text, failed }) {
+  if (failed) {
+    return (
+      <Fallback>
+        <span className="text-sm leading-[1.3] font-semibold">Preview unavailable</span>
+        <span className="text-[12.5px] leading-[1.55] text-ink/55">
+          The file could not be loaded. Downloading it may still work.
+        </span>
+      </Fallback>
+    )
+  }
+
+  if (!url) {
+    return (
+      <Fallback>
+        <span className="font-mono text-[11.5px] leading-none text-ink/45">loading preview…</span>
+      </Fallback>
+    )
+  }
+
   if (kind === 'image') {
     return (
-      <div className="flex w-full max-w-[560px] flex-col items-center gap-2.5">
-        <div className="flex aspect-[4/3] w-full items-center justify-center rounded-[10px] border border-ink/12 bg-[repeating-conic-gradient(#fff_0%_25%,#ebebe9_0%_50%)] bg-[length:22px_22px]">
-          <span className="rounded-md bg-ink/82 px-3 py-2 font-mono text-[11.5px] leading-none font-medium text-white">
-            image preview · {file.name}
-          </span>
-        </div>
-        <span className="font-mono text-[11.5px] leading-none text-ink/45">
-          1600 × 1200 · fit to width
-        </span>
+      <div className="flex w-full max-w-[720px] flex-col items-center gap-2.5">
+        <img
+          src={url}
+          alt={file.name}
+          className="max-h-[68vh] w-auto max-w-full rounded-[10px] border border-ink/12 bg-[repeating-conic-gradient(#fff_0%_25%,#ebebe9_0%_50%)] bg-[length:22px_22px] object-contain"
+        />
       </div>
     )
   }
 
   if (kind === 'pdf') {
     return (
-      <div className="flex w-full max-w-[520px] flex-col items-center gap-3.5">
-        <div className="flex aspect-[1/1.294] w-full flex-col gap-4 rounded border border-ink/12 bg-panel px-[46px] py-11 shadow-[0_4px_18px_rgba(23,23,23,.1)]">
-          <span className="text-[17px] leading-[1.3] font-semibold">{file.taskTitle}</span>
-          <span className="font-mono text-[11.5px] leading-none text-ink/45">
-            {file.taskId} · draft
-          </span>
-          <div className="flex flex-col gap-[9px] pt-1.5">
-            {FILE_PREVIEW_LINES.map((line, index) => (
-              <span
-                key={`${line}-${index}`}
-                className="text-[12.5px] leading-[1.4] font-medium text-ink/70"
-              >
-                {line}
-              </span>
-            ))}
-          </div>
-          <div className="flex flex-col gap-[7px] pt-1">
-            {['100%', '100%', '72%', '100%', '54%'].map((width, index) => (
-              <span
-                key={index}
-                style={{ width }}
-                className="h-[7px] rounded-[3px] bg-ink/9"
-                aria-hidden="true"
-              />
-            ))}
-          </div>
-        </div>
-        <span className="font-mono text-[11.5px] leading-none text-ink/45">Page 1 of 4</span>
-      </div>
+      <iframe
+        src={url}
+        title={file.name}
+        className="h-[68vh] w-full max-w-[720px] rounded border border-ink/12 bg-panel"
+      />
     )
   }
 
-  if (kind === 'sheet') {
-    return (
-      <div className="w-full max-w-[680px] overflow-hidden rounded-lg border border-ink/12 bg-panel">
-        {FILE_PREVIEW_ROWS.map((cells, rowIndex) => (
-          <div
-            key={cells[0]}
-            className={`grid grid-cols-[1.4fr_1fr_1fr_1fr] border-b border-ink/8 ${
-              rowIndex === 0 ? 'bg-canvas' : 'bg-panel'
-            }`}
-          >
-            {cells.map((cell) => (
-              <span
-                key={cell}
-                className={`border-r border-ink/7 px-3 py-2.5 text-[12.5px] leading-[1.3] text-ink/80 ${
-                  rowIndex === 0 ? 'font-semibold' : 'font-normal'
-                }`}
-              >
-                {cell}
-              </span>
-            ))}
-          </div>
-        ))}
-      </div>
-    )
-  }
+  if (kind === 'csv' && text !== null) return <CsvTable text={text} />
 
-  if (kind === 'text') {
+  if ((kind === 'text' || kind === 'csv') && text !== null) {
     return (
       <div className="w-full max-w-[680px] rounded-lg border border-ink/12 bg-panel px-[22px] py-5 font-mono text-[12.5px] leading-[1.75] whitespace-pre-wrap text-ink/78">
-        {`## ${file.taskTitle}
-
-- owner: Iqbal
-- status: in review
-- linked: ${file.taskId}
-
-Notes captured during the working session. Update before sign-off.`}
+        {text}
       </div>
     )
   }
 
   return (
-    <div className="flex w-full max-w-[420px] flex-col items-center gap-[9px] rounded-[10px] border border-ink/12 bg-panel px-6 py-11 text-center">
+    <Fallback>
       <span className="text-sm leading-[1.3] font-semibold">No preview for .{file.ext}</span>
       <span className="text-[12.5px] leading-[1.55] text-ink/55">
         Download the file to open it in its own application.
       </span>
-    </div>
+    </Fallback>
   )
 }
 
 export default function FilePreviewDialog() {
   const { state, actions } = useApp()
   const file = state.preview
-  const kind = kindOf(file.ext)
+  const kind = kindOf(file)
+
+  const [preview, setPreview] = useState({ for: null, url: null, text: null, failed: false })
+
+  // Opening a different file resets during render rather than in an effect, so
+  // the previous file's image is never painted under the new file's name.
+  if (preview.for !== file.id) {
+    setPreview({ for: file.id, url: null, text: null, failed: false })
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const signed = await api.fileUrl(file.id, 'inline')
+        if (cancelled) return
+        setPreview((prev) => ({ ...prev, for: file.id, url: signed.url }))
+
+        if ((kind.key === 'text' || kind.key === 'csv') && file.size <= TEXT_PREVIEW_LIMIT) {
+          const response = await fetch(signed.url)
+          const body = await response.text()
+          if (!cancelled) setPreview((prev) => ({ ...prev, for: file.id, text: body }))
+        }
+      } catch {
+        if (!cancelled) setPreview((prev) => ({ ...prev, for: file.id, failed: true }))
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [file.id, file.size, kind.key])
+
+  const { url, text, failed } = preview
+
+  /**
+   * The bucket is a different origin and the sandbox blocks a plain link, so a
+   * download is fetch → blob → a[download]: the filename survives and the bytes
+   * still never pass through the API.
+   */
+  const download = async () => {
+    try {
+      const signed = await api.fileUrl(file.id, 'attachment')
+      const response = await fetch(signed.url)
+      const blob = await response.blob()
+      const href = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = href
+      anchor.download = file.name
+      document.body.append(anchor)
+      anchor.click()
+      anchor.remove()
+      URL.revokeObjectURL(href)
+    } catch {
+      setPreview((prev) => ({ ...prev, failed: true }))
+    }
+  }
 
   return (
     <Dialog onClose={actions.closePreview} width={820} scrim={46} zIndex={80} label={file.name}>
@@ -129,18 +201,24 @@ export default function FilePreviewDialog() {
           <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
             <span className="truncate text-[13.5px] leading-[1.25] font-semibold">{file.name}</span>
             <span className="font-mono text-[11px] leading-none text-ink/45">
-              {kind.label} · {file.meta}
+              {kind.label} · {fileMeta(file)}
             </span>
           </span>
+          {file.taskId && (
+            <button
+              type="button"
+              onClick={() => {
+                actions.closePreview()
+                actions.revealTask(file.taskId)
+              }}
+              className="cursor-pointer rounded-[7px] border border-ink/16 bg-panel px-[11px] py-[7px] text-xs leading-none font-medium hover:bg-canvas"
+            >
+              Open {file.taskRef ?? 'task'}
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => actions.revealTask(file.taskId)}
-            className="cursor-pointer rounded-[7px] border border-ink/16 bg-panel px-[11px] py-[7px] text-xs leading-none font-medium hover:bg-canvas"
-          >
-            Open {file.taskId}
-          </button>
-          <button
-            type="button"
+            onClick={download}
             className="cursor-pointer rounded-[7px] bg-ink px-[11px] py-[7px] text-xs leading-none font-semibold text-white"
           >
             Download
@@ -156,7 +234,7 @@ export default function FilePreviewDialog() {
         </div>
 
         <div className="flex min-h-0 flex-1 justify-center overflow-y-auto bg-canvas p-[22px]">
-          <Body file={file} kind={kind.key} />
+          <Body file={file} kind={kind.key} url={url} text={text} failed={failed} />
         </div>
       </div>
     </Dialog>

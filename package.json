@@ -1,0 +1,13 @@
+{
+  "name": "taskspace",
+  "private": true,
+  "workspaces": ["backend", "ws"],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "dev:api": "bun run --cwd backend dev",
+    "dev:ws": "bun run --cwd ws dev",
+    "db:push": "bun run --cwd backend db:push",
+    "db:seed": "bun run --cwd backend db:seed",
+    "test": "bun run --cwd backend test"
+  }
+}

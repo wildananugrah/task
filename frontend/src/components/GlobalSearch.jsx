@@ -1,12 +1,10 @@
-import { globalMatches, memberOf, statusOf, workspaceOf } from '../lib/select'
 import { useApp } from '../state/useApp'
 import StatusDot from './ui/StatusDot'
 
-/** Results panel anchored under the sidebar search field. */
+/** Results panel anchored under the sidebar search field, served by the API. */
 export default function GlobalSearch() {
   const { state, actions } = useApp()
-  const matches = globalMatches(state)
-  const shown = matches.slice(0, 8)
+  const matches = state.searchResults
 
   return (
     <>
@@ -22,31 +20,31 @@ export default function GlobalSearch() {
         </div>
 
         <div className="max-h-[340px] overflow-y-auto">
-          {shown.map((task) => {
-            const status = statusOf(state, task.status)
-            return (
-              <button
-                key={task.id}
-                type="button"
-                onClick={() => actions.revealTask(task.id)}
-                className="flex w-full cursor-pointer items-center gap-[11px] border-b border-b-ink/6 bg-transparent px-[13px] py-[11px] text-left hover:bg-canvas"
-              >
-                <span className="flex-none font-mono text-[11px] leading-none font-medium text-ink/45">
-                  {task.id}
+          {matches.slice(0, 8).map((task) => (
+            <button
+              key={task.id}
+              type="button"
+              onClick={() => actions.revealTask(task.id)}
+              className="flex w-full cursor-pointer items-center gap-[11px] border-b border-b-ink/6 bg-transparent px-[13px] py-[11px] text-left hover:bg-canvas"
+            >
+              <span className="flex-none font-mono text-[11px] leading-none font-medium text-ink/45">
+                {task.ref}
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
+                <span className="truncate text-[13px] leading-[1.25] font-medium">{task.title}</span>
+                <span className="truncate font-mono text-[11px] leading-none text-ink/45">
+                  {task.workspaceName}
+                  {task.assignee ? ` · ${task.assignee.name}` : ''}
                 </span>
-                <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
-                  <span className="truncate text-[13px] leading-[1.25] font-medium">{task.title}</span>
-                  <span className="font-mono text-[11px] leading-none text-ink/45">
-                    {workspaceOf(state, task.ws).name} · {memberOf(state, task.assignee).name}
-                  </span>
-                </span>
+              </span>
+              {task.status && (
                 <span className="flex flex-none items-center gap-1.5 text-[11.5px] leading-none font-medium text-ink/65">
-                  <StatusDot color={status.color} />
-                  {status.name}
+                  <StatusDot color={task.status.color} />
+                  {task.status.name}
                 </span>
-              </button>
-            )
-          })}
+              )}
+            </button>
+          ))}
 
           {matches.length === 0 && (
             <div className="px-3.5 py-[26px] text-center text-[13px] leading-[1.5] text-ink/50">
