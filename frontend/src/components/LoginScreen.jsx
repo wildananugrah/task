@@ -73,6 +73,15 @@ export default function LoginScreen() {
             </p>
           </div>
 
+          {state.authError && (
+            <div
+              role="alert"
+              className="flex flex-col gap-1 rounded-[10px] border border-ink/22 bg-[#f4f4f3] px-[15px] py-3"
+            >
+              <span className="text-[12.5px] leading-[1.45] font-medium">{state.authError}</span>
+            </div>
+          )}
+
           <div className="flex flex-col gap-3">
             <button
               type="button"

@@ -141,3 +141,28 @@ describe('invites', () => {
     expect(members.body.members.filter((member: any) => member.email === email)).toHaveLength(1)
   })
 })
+
+describe('GOOGLE_ALLOWED_DOMAINS', () => {
+  /**
+   * Set to an origin rather than an email domain, this refused every sign-in
+   * and did it as a redirect back to the login screen — no error, no log, and
+   * the person looking at it cannot tell it apart from never having tried.
+   */
+  test('an origin is rejected at boot rather than at sign-in', async () => {
+    const { parseEmailDomainsForTest } = await import('../src/lib/env')
+
+    expect(() => parseEmailDomainsForTest('https://task.mhamzah.id')).toThrow(
+      /bare email domains/,
+    )
+    expect(() => parseEmailDomainsForTest('mhamzah.id/')).toThrow(/bare email domains/)
+    expect(() => parseEmailDomainsForTest('someone@mhamzah.id')).toThrow(/bare email domains/)
+  })
+
+  test('bare domains parse, and empty means everyone', async () => {
+    const { parseEmailDomainsForTest } = await import('../src/lib/env')
+
+    expect(parseEmailDomainsForTest('')).toEqual([])
+    expect(parseEmailDomainsForTest('mhamzah.id')).toEqual(['mhamzah.id'])
+    expect(parseEmailDomainsForTest(' MHamzah.id , team.co ')).toEqual(['mhamzah.id', 'team.co'])
+  })
+})

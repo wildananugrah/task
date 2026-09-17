@@ -106,6 +106,14 @@ if [ "$DO_API" = 1 ]; then
   case "$(env_value S3_BUCKET)$(env_value S3_ACCESS_KEY_ID)" in
     *CHANGE_ME*|"") info "WARNING: S3 is not configured — file upload, preview and download will fail in the browser. Everything else works." ;;
   esac
+  # An origin here instead of an email domain refuses every sign-in, and does it
+  # as a redirect back to the login screen with nothing in any server log.
+  for domain in $(env_value GOOGLE_ALLOWED_DOMAINS | tr ',' ' '); do
+    case "$domain" in
+      *://*|*/*|*@*) die "GOOGLE_ALLOWED_DOMAINS contains '$domain' — it takes bare email domains (mhamzah.id), not a URL. As written no address could match and every Google sign-in would be refused." ;;
+    esac
+  done
+
   if [ -z "$(env_value GOOGLE_CLIENT_ID)" ] && [ "$(env_value AUTH_DEV_MODE)" != "true" ]; then
     info "WARNING: no GOOGLE_CLIENT_ID and AUTH_DEV_MODE=false — NOBODY can sign in. The site will load and show a login screen with no way past it."
   fi

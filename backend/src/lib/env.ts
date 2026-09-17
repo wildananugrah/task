@@ -23,6 +23,23 @@ const int = (name: string, fallback: number) => {
 
 const appOrigin = process.env.APP_ORIGIN ?? 'http://localhost:5173'
 
+function parseEmailDomains(raw: string) {
+  const domains = raw
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+
+  const malformed = domains.filter((domain) => !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain))
+  if (malformed.length) {
+    throw new Error(
+      `GOOGLE_ALLOWED_DOMAINS must be bare email domains such as "mhamzah.id", not ${malformed
+        .map((value) => JSON.stringify(value))
+        .join(', ')}. As written, no address could match and every sign-in would be refused.`,
+    )
+  }
+  return domains
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   isProduction: process.env.NODE_ENV === 'production',
@@ -53,10 +70,10 @@ export const env = {
     clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
     redirectUri:
       process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:3004/api/auth/google/callback',
-    allowedDomains: (process.env.GOOGLE_ALLOWED_DOMAINS ?? '')
-      .split(',')
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean),
+    // Bare email domains only. A value with a scheme, a slash or an "@" is
+    // someone having read this as an origin allow-list, and it would silently
+    // refuse every sign-in — so it is rejected at boot instead of at 2am.
+    allowedDomains: parseEmailDomains(process.env.GOOGLE_ALLOWED_DOMAINS ?? ''),
   },
 
   s3: {
@@ -72,5 +89,8 @@ export const env = {
   uploadUrlTtl: int('UPLOAD_URL_TTL', 300),
   downloadUrlTtl: int('DOWNLOAD_URL_TTL', 300),
 }
+
+/** Exported for the test that pins the shape this field accepts. */
+export const parseEmailDomainsForTest = parseEmailDomains
 
 export const googleEnabled = () => Boolean(env.google.clientId && env.google.clientSecret)

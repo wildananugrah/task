@@ -32,6 +32,37 @@ function writeLastPlace(place) {
   }
 }
 
+/**
+ * A failed Google sign-in comes back as a redirect to /?auth_error=<reason>.
+ * Without this the app just renders the login screen again, which looks exactly
+ * like never having tried — the failure is invisible to the person it happened
+ * to, and to anyone they report it to.
+ */
+const AUTH_ERRORS = {
+  no_code: 'Google did not return a sign-in code. Please try again.',
+  bad_state: 'That sign-in attempt expired or was started in another tab. Please try again.',
+  token_exchange: 'Google rejected the sign-in. The server’s client ID or secret looks wrong.',
+  no_id_token: 'Google did not return an identity token. Please try again.',
+  unverified_email: 'That Google account has no verified email address.',
+  domain_not_allowed:
+    'That email domain is not allowed to sign in here. Ask an admin about GOOGLE_ALLOWED_DOMAINS.',
+}
+
+function takeAuthError() {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get('auth_error')
+    if (!code) return null
+    // Clear it so a reload does not show the same failure forever.
+    params.delete('auth_error')
+    const query = params.toString()
+    window.history.replaceState({}, '', `${window.location.pathname}${query ? `?${query}` : ''}`)
+    return AUTH_ERRORS[code] ?? `Sign-in failed (${code}).`
+  } catch {
+    return null
+  }
+}
+
 function initialState() {
   return {
     /* — session — */
@@ -39,6 +70,7 @@ function initialState() {
     me: null,
     providers: { google: false, dev: true },
     signingIn: false,
+    authError: null,
 
     /* — data — */
     cards: [],
@@ -249,14 +281,16 @@ export function AppProvider({ children }) {
       }
       if (cancelled) return
 
+      const authError = takeAuthError()
+
       try {
         const { user } = await api.me()
         if (cancelled) return
-        update({ providers })
+        update({ providers, authError })
         if (user) await enterApp(user)
         else update({ screen: 'login' })
       } catch {
-        if (!cancelled) update({ screen: 'login', providers })
+        if (!cancelled) update({ screen: 'login', providers, authError })
       }
     })()
     return () => {
@@ -431,6 +465,7 @@ export function AppProvider({ children }) {
     return {
       /* — session — */
       signInWithGoogle: () => {
+        update({ authError: null })
         window.location.href = api.googleUrl()
       },
       signInAs: async (email) => {

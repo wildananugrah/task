@@ -71,8 +71,14 @@ authRoutes.get('/google', async (c) => {
 authRoutes.get('/google/callback', async (c) => {
   if (!googleEnabled()) badRequest('Google sign-in is not configured on this server')
 
-  const failed = (reason: string) =>
-    c.redirect(`${env.appOrigin}/?auth_error=${encodeURIComponent(reason)}`)
+  // Every failure below is a redirect back to the app, which on its own is
+  // indistinguishable from never having signed in. Log the reason: a sign-in
+  // that silently bounces the user to the login screen is otherwise guesswork
+  // from both ends.
+  const failed = (reason: string, detail?: unknown) => {
+    console.warn(`[auth] google sign-in failed: ${reason}`, detail ?? '')
+    return c.redirect(`${env.appOrigin}/?auth_error=${encodeURIComponent(reason)}`)
+  }
 
   const code = c.req.query('code')
   const state = c.req.query('state')
@@ -95,7 +101,9 @@ authRoutes.get('/google/callback', async (c) => {
       grant_type: 'authorization_code',
     }),
   })
-  if (!response.ok) return failed('token_exchange')
+  if (!response.ok) {
+    return failed('token_exchange', await response.text().catch(() => ''))
+  }
 
   const token = (await response.json()) as { id_token?: string }
   if (!token.id_token) return failed('no_id_token')
@@ -109,7 +117,10 @@ authRoutes.get('/google/callback', async (c) => {
   const email = normalizeEmail(claims.email)
   const domain = email.split('@')[1] ?? ''
   if (env.google.allowedDomains.length && !env.google.allowedDomains.includes(domain)) {
-    return failed('domain_not_allowed')
+    return failed(
+      'domain_not_allowed',
+      `address domain "${domain}" is not in GOOGLE_ALLOWED_DOMAINS (${env.google.allowedDomains.join(', ')})`,
+    )
   }
 
   const user = await upsertUserByEmail({
