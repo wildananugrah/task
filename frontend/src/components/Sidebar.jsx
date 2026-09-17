@@ -38,6 +38,12 @@ function WorkspaceNav() {
     { key: 'settings', label: 'Workspace settings', icon: '⚙', count: '' },
   ]
 
+  // Deliberately empty for now — the section is here so its contents can be
+  // added one entry at a time. An entry is { key, label, icon, onClick } and
+  // may carry `count` (a number, or '' for none) and `admin: true` to hide it
+  // from anyone who is not one.
+  const tools = []
+
   const isActive = (key) =>
     (key === 'tasks' && state.screen === 'tasks' && state.view === 'list') ||
     (key === 'board' && state.screen === 'tasks' && state.view === 'board') ||
@@ -107,6 +113,37 @@ function WorkspaceNav() {
               )}
             </button>
           ))}
+        </div>
+
+        <div className="flex flex-col gap-0.5">
+          <SectionLabel>Tools</SectionLabel>
+          {tools
+            .filter((tool) => !tool.admin || admin)
+            .map((tool) => (
+              <button
+                key={tool.key}
+                type="button"
+                onClick={tool.onClick}
+                className="flex cursor-pointer items-center gap-2.5 rounded-lg bg-transparent px-[9px] py-2 text-left text-[13px] leading-none font-medium text-shell-ink/66 hover:bg-shell-ink/9"
+              >
+                <span aria-hidden="true" className="w-[15px] text-center text-[12.5px] opacity-80">
+                  {tool.icon}
+                </span>
+                <span className="flex-1">{tool.label}</span>
+                {tool.count !== '' && tool.count !== undefined && (
+                  <span className="font-mono text-[10.5px] leading-none font-medium text-shell-ink/50">
+                    {tool.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          {tools.length === 0 && (
+            // Without this the header sits above nothing and reads as a bug
+            // rather than as a section waiting to be filled.
+            <span className="px-[9px] py-1.5 text-[12.5px] leading-none text-shell-ink/30 italic">
+              Nothing here yet
+            </span>
+          )}
         </div>
 
         <div className="flex flex-col gap-0.5">
