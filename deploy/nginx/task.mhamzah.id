@@ -68,6 +68,29 @@ server {
       proxy_request_buffering off;
   }
 
+  # THE CHAT SOCKET. Separate process from the API (:3005), so this needs its
+  # own block — and the Upgrade headers, without which nginx answers the
+  # handshake itself and the browser sees a 400 it cannot explain.
+  #
+  # `^~` for the same reason /api/ uses it: no regex location may claim it first.
+  location ^~ /ws {
+      proxy_pass http://127.0.0.1:3005;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      # A chat socket is idle between messages. The default 60s read timeout
+      # would drop every connection a minute after the last thing anyone said.
+      proxy_read_timeout 3600s;
+      proxy_send_timeout 3600s;
+      # Nothing to buffer on a message stream, and buffering adds latency to the
+      # one thing here that is supposed to feel immediate.
+      proxy_buffering off;
+  }
+
   # ---------------------------------------------------------------------------
   # LEGACY blocks (below) — these proxy bare /users, /streams, /communities and
   # /webhooks to :3004. They were written for an earlier backend whose source is

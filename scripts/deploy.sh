@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Full-stack deploy for task: infra (Postgres + MediaMTX), backend API,
+# Full-stack deploy for task: infra (Postgres + S3), backend API, chat socket,
 # frontend bundle and the nginx site — in one command.
 #
 # The three independent stages (infra / frontend build / backend install) run in
@@ -38,9 +38,15 @@ WEB_DIST_TARGETS=( "/var/www/html/task/dist" )
 # The first is the canonical one for single-host checks and messages.
 NGINX_SITE="${SITES[0]}"
 NGINX_AVAILABLE="/etc/nginx/sites-available/$NGINX_SITE"
-API_PORT="$(grep -E '^PORT=' backend/.env 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || true)"
-API_PORT="${API_PORT:-3004}"
+# Read from backend/.env so a port change in one place moves the health checks
+# with it. These are API_PORT/WS_PORT, not PORT — grepping '^PORT=' matched
+# nothing and silently fell back to 3004 while the API listened elsewhere.
+env_value() { grep -E "^$1=" backend/.env 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '[:space:]'; }
+API_PORT="$(env_value API_PORT)"; API_PORT="${API_PORT:-3004}"
+WS_PORT="$(env_value WS_PORT)";   WS_PORT="${WS_PORT:-3005}"
 PM2_APP="task-api"
+PM2_WS_APP="task-ws"
+PM2_ECOSYSTEM="$REPO_ROOT/ecosystem.config.cjs"
 
 DO_INFRA=1 DO_WEB=1 DO_API=1 DO_NGINX=1 PARALLEL=1
 for arg in "$@"; do
@@ -69,12 +75,32 @@ die()  { printf "\033[31mERROR:\033[0m %s\n" "$*" >&2; exit 1; }
 say "preflight"
 need() { command -v "$1" >/dev/null || die "missing required command: $1"; }
 need bun; need docker; need curl
+[ "$DO_WEB" = 1 ] && need npm
 [ "$DO_API"   = 1 ] && need pm2
 [ "$DO_WEB"   = 1 ] && need rsync
 [ "$DO_NGINX" = 1 ] && need nginx
 
 [ "$DO_API" = 1 ] && [ ! -f backend/.env ] && die "backend/.env missing (copy backend/.env.example and fill it in)"
+[ "$DO_API" = 1 ] && [ ! -f ws/.env ] && die "ws/.env missing (copy ws/.env.example and fill it in)"
 [ "$DO_INFRA" = 1 ] && [ ! -f infra/.env ] && die "infra/.env missing (copy infra/.env.example and fill it in)"
+[ "$DO_API" = 1 ] && [ ! -f "$PM2_ECOSYSTEM" ] && die "missing $PM2_ECOSYSTEM"
+
+# These two are the difference between a deploy and an incident, and both are
+# easy to leave at their development values by copying the wrong env file.
+if [ "$DO_API" = 1 ]; then
+  [ "$(env_value AUTH_DEV_MODE)" = "true" ] && die "backend/.env has AUTH_DEV_MODE=true — that lets anyone sign in as any email address. Set it to false."
+  case "$(env_value APP_ORIGIN)" in
+    ""|*localhost*|*127.0.0.1*) die "backend/.env has a local APP_ORIGIN ($(env_value APP_ORIGIN)) — the session cookie will not be marked Secure and Google sign-in will redirect to the wrong host." ;;
+  esac
+  case "$(env_value SESSION_SECRET)$(env_value WS_TICKET_SECRET)" in
+    *CHANGE_ME*|*change-me*|"") die "backend/.env still has placeholder secrets — generate them with: openssl rand -hex 32" ;;
+  esac
+  # The API mints socket tickets and ws/ verifies them; a mismatch is a chat
+  # service that refuses every connection with no error anywhere but the browser.
+  if [ "$(env_value WS_TICKET_SECRET)" != "$(grep -E '^WS_TICKET_SECRET=' ws/.env | tail -1 | cut -d= -f2- | tr -d '[:space:]')" ]; then
+    die "WS_TICKET_SECRET differs between backend/.env and ws/.env — every socket connection would be rejected"
+  fi
+fi
 
 # A deploy that leaves the API unreachable from nginx is worse than no deploy.
 if [ "$DO_NGINX" = 0 ] && [ -f "$NGINX_AVAILABLE" ] && ! grep -q "location ^~ /api/" "$NGINX_AVAILABLE"; then
@@ -120,16 +146,20 @@ stage_infra() {
 stage_web_build() {
   (
     cd "$REPO_ROOT/frontend"
-    bun install --frozen-lockfile 2>/dev/null || bun install
+    # npm, not bun: package-lock.json is the lockfile this app commits, and
+    # `bun install` here would write a second one that drifts from it.
+    npm ci 2>/dev/null || npm install
     # VITE_API_URL is intentionally unset: in production the SPA and API share an
     # origin, so the client's default of "/api" is what we want.
-    bun run build
+    npm run build
     [ -f dist/index.html ] || { echo "build produced no dist/index.html"; exit 1; }
   )
 }
 
 stage_api_install() {
-  ( cd "$REPO_ROOT/backend" && { bun install --frozen-lockfile 2>/dev/null || bun install; } )
+  # From the workspace root: backend/ and ws/ share one node_modules, and ws/
+  # imports the API's schema, so installing only backend/ leaves it broken.
+  ( cd "$REPO_ROOT" && { bun install --frozen-lockfile 2>/dev/null || bun install; } )
 }
 
 wait_for_postgres() {
@@ -236,18 +266,21 @@ fi
 # with index.html. Adding the /api block while the OLD frontend is still live is
 # harmless, because the old bundle never calls it.
 if [ "$DO_API" = 1 ]; then
-  say "api: (re)starting '$PM2_APP' on :$API_PORT"
-  # startOrReload against the ecosystem file touches ONLY task-api. Never use
-  # `pm2 restart all` here: this box also runs unrelated apps under pm2.
+  say "api: (re)starting '$PM2_APP' on :$API_PORT and '$PM2_WS_APP' on :$WS_PORT"
   # delete-then-start, not startOrReload: pm2 keeps the exec_mode/interpreter an
   # app was first created with, so a reload would silently ignore changes to
   # ecosystem.config.cjs. Single-instance fork mode restarts on reload anyway, so
-  # this costs no extra downtime. Scoped to $PM2_APP by name — never `pm2
-  # restart all`, this box also runs unrelated apps under pm2.
+  # this costs no extra downtime. Scoped to these two app names — never
+  # `pm2 restart all`, this box also runs unrelated apps under pm2.
+  #
+  # The socket is restarted with the API rather than left alone: it imports the
+  # API's schema, so leaving it on old code after a migration is the one way the
+  # two can disagree about what a message is.
   pm2 delete "$PM2_APP" >/dev/null 2>&1 || true
-  ( cd "$REPO_ROOT/backend" && pm2 start ecosystem.config.cjs --update-env ) | sed 's/^/    /'
+  pm2 delete "$PM2_WS_APP" >/dev/null 2>&1 || true
+  ( cd "$REPO_ROOT" && pm2 start "$PM2_ECOSYSTEM" --update-env ) | sed 's/^/    /'
   pm2 save >/dev/null 2>&1 || true
-  ok "api reloaded"
+  ok "api and chat socket started"
 fi
 
 if [ "$DO_NGINX" = 1 ]; then
@@ -277,13 +310,23 @@ if [ "$DO_API" = 1 ]; then
   # Poll rather than sleep-once: pm2 reports "online" the instant it forks, well
   # before the process has bound the port — and it reports "online" for a process
   # that is crashing on startup, too. Only /health proves the API is serving.
+  # Every API route is mounted under /api, health included — probing /health
+  # here hit the catch-all 404 and reported a working API as broken.
   api_code=000
   for _ in $(seq 1 15); do
-    api_code="$(http_code "http://127.0.0.1:$API_PORT/health")"
+    api_code="$(http_code "http://127.0.0.1:$API_PORT/api/health")"
     [ "$api_code" = 200 ] && break
     sleep 1
   done
-  check "api /health (direct :$API_PORT)" 200 "$api_code"
+  check "api /api/health (direct :$API_PORT)" 200 "$api_code"
+
+  ws_code=000
+  for _ in $(seq 1 15); do
+    ws_code="$(http_code "http://127.0.0.1:$WS_PORT/health")"
+    [ "$ws_code" = 200 ] && break
+    sleep 1
+  done
+  check "chat socket /health (direct :$WS_PORT)" 200 "$ws_code"
 fi
 
 if [ "$DO_NGINX" = 1 ] || [ "$DO_WEB" = 1 ]; then
@@ -294,21 +337,35 @@ if [ "$DO_NGINX" = 1 ] || [ "$DO_WEB" = 1 ]; then
     check "$site / (through nginx)" 200 "$(http_code "https://$site/")"
     # The one that actually proves the /api proxy block works: this must be JSON
     # from the API, not the SPA's index.html.
-    api_probe="$(curl -s -o /dev/null -w '%{http_code} %{content_type}' --max-time 10 "https://$site/api/communities" || echo "000 none")"
+    # The one that actually proves the /api proxy block works: this must be JSON
+    # from the API, not the SPA's index.html. /api/health and not some resource
+    # route — the API answers 404s in JSON too, so a 404 would "pass" here and
+    # hide a proxy that is routing nowhere.
+    api_probe="$(curl -s --max-time 10 "https://$site/api/health" || true)"
     case "$api_probe" in
-      *application/json*) ok "$site api via nginx (/api -> JSON)" ;;
-      502*) printf "    \033[31mFAIL\033[0m %s api via nginx: 502 — nginx routes /api correctly but the API is not answering on :%s (check \`pm2 logs %s\`)\n" "$site" "$API_PORT" "$PM2_APP"; FAILED=1 ;;
-      *) printf "    \033[31mFAIL\033[0m %s api via nginx returned '%s' — /api is falling through to the SPA\n" "$site" "$api_probe"; FAILED=1 ;;
+      *'"service":"taskspace-api"'*) ok "$site api via nginx (/api -> the API)" ;;
+      *'<!doctype'*|*'<html'*) printf "    \033[31mFAIL\033[0m %s /api is falling through to the SPA — nginx has no '/api' block\n" "$site"; FAILED=1 ;;
+      *) printf "    \033[31mFAIL\033[0m %s api via nginx returned '%s' (check \`pm2 logs %s\`)\n" "$site" "${api_probe:0:80}" "$PM2_APP"; FAILED=1 ;;
     esac
-    # Live playback: this must reach MediaMTX (302 to its cookie check), never the
-    # SPA fallback, which would hand the player HTML where it expects a playlist.
-    hls_probe="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "https://$site/hls/c/deploycheck/index.m3u8" || echo 000)"
-    check "$site /hls -> MediaMTX" 302 "$hls_probe"
+
+    # The chat socket, through nginx. A handshake without the Upgrade headers is
+    # answered 400 by the socket itself and 200-with-HTML by the SPA fallback, so
+    # asking for the upgrade is the only probe that tells those two apart.
+    ws_probe="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+      -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+      -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: ZGVwbG95Y2hlY2sxMjM0NQ==' \
+      "https://$site/ws" || echo 000)"
+    case "$ws_probe" in
+      # 401 is the socket refusing a ticketless handshake — which means it is
+      # there, reachable, and checking. That is exactly what we want to see.
+      401|101) ok "$site /ws -> chat socket ($ws_probe)" ;;
+      *) printf "    \033[31mFAIL\033[0m %s /ws returned %s — nginx is not proxying the socket (check the 'location ^~ /ws' block and its Upgrade headers)\n" "$site" "$ws_probe"; FAILED=1 ;;
+    esac
   done
 fi
 
 say "done in $((SECONDS - START_TS))s"
-pm2 list 2>/dev/null | grep -E "name|$PM2_APP" || true
+pm2 list 2>/dev/null | grep -E "name|$PM2_APP|$PM2_WS_APP" || true
 
 if [ "$FAILED" -ne 0 ]; then
   echo ""

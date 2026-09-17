@@ -113,8 +113,17 @@ information rather than decoration.
 passes), real secrets, `AUTH_DEV_MODE=false`, and an nginx block for `/api/` and
 `/ws`.
 
-`scripts/deploy.sh` and `deploy/` came from a different product on the same
-domain and were never rewritten. They describe an API on `:3004`, MediaMTX and
-pm2 — and while this app's API does listen on `:3004`, nothing else in there
-belongs to it. Treat that nginx config as a record of what is currently live on
-that host, not as this app's deployment.
+`scripts/deploy.sh` deploys this app end to end: infra, migrations, both pm2
+processes (`task-api`, `task-ws` from `ecosystem.config.cjs`), the bundle and the
+nginx site, then verifies it is actually serving. It refuses in preflight if
+`backend/.env` still looks like a development file.
+
+```sh
+cp backend/.env.example backend/.env    # and fill it in
+cp backend/.env.example ws/.env
+./scripts/deploy.sh                     # --serial to read it, --skip-web etc. to narrow it
+```
+
+`deploy/nginx/task.mhamzah.id` is shared with a different product on the same
+host — its `/api/` and `/ws` blocks are this app's, the `/streams`,
+`/communities` and `/hls` blocks below them are not. Leave those alone.

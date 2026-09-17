@@ -8,22 +8,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 chat), `infra/` (compose file, env template, runbook) and `docs/SPEC.md`. All
 four are real; none of them are placeholders any more.
 
-`deploy/` and `scripts/deploy.sh` were **inherited from a different product** (a
-streaming app on the same domain) and were never rewritten for this one. They
-describe MediaMTX/HLS playback, pm2 and `communities`/`streams` routes — none of
-which exist in this repo. The `:3004` and `/api` parts happen to line up with
-this app's API because the API was given that port deliberately; everything else
-is history, not documentation:
+`scripts/deploy.sh` **does deploy this app** — infra, migrations, both pm2
+processes, the bundle and the nginx site. `ecosystem.config.cjs` at the root
+declares `task-api` and `task-ws`; this box runs unrelated apps under pm2, so
+both are addressed by name and `pm2 restart all` is never correct here.
 
-- `scripts/deploy.sh` aborts in preflight without `backend/.env` and `infra/.env`
-  in the shapes *it* expects, which are not the shapes this repo ships.
-- `deploy/notes.md` talks about "two hostnames"; both names in it are the same
-  string, left over from a find-and-replace.
-- `deploy/nginx/task.mhamzah.id` carries live legacy proxy blocks its own
-  comments mark as dead.
+`deploy/nginx/task.mhamzah.id` is the live site config, and it is **shared with a
+different product** on the same host. Its `/api/` and `/ws` blocks are this app's;
+the `/users`, `/streams`, `/communities` and `/hls` blocks below them are that
+other product's, dead, and marked so by their own comments. Leave them — they are
+production routing this repo does not otherwise describe. `deploy/notes.md` is
+the same vintage: it talks about "two hostnames" that are the same string, left
+over from a find-and-replace.
 
-Do not "fix" these — they are production routing for a box this repo does not
-otherwise describe. `infra/nginx/taskspace.conf.example` is this app's block.
+The deploy refuses to run in preflight if `backend/.env` still has
+`AUTH_DEV_MODE=true`, a localhost `APP_ORIGIN`, placeholder secrets, or a
+`WS_TICKET_SECRET` that disagrees with `ws/.env`. Those are the four ways a
+development env file quietly becomes a production incident.
 
 ## Commands
 
